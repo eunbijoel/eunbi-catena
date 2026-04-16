@@ -9,3 +9,9 @@ venv/
 
 # 별도 Git 저장소 (GitHub: catena_X_project) — 상위 repo에 포함하지 않음
 catena_X_project/
+
+# Catena-X mock store (edc.py onboard 결과)
+/store/
+
+# 로컬 mock 실행 산출물 (onboard 로 재생성 가능)
+/data/

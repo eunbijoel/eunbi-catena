@@ -1,30 +1,58 @@
-"""Catena-X EDC 커넥터 – 공장 협동로봇(Cobot) 데이터 AAS 연동 구현체.
+"""edc.py — Catena-X 협동로봇 데이터 플랫폼 핵심 엔트리포인트.
 
-BerePi 프로젝트(github.com/jeonghoonkang/BerePi) 의 apps/catenax 코드를 기반으로
-아래 항목을 확장·보완한 파일입니다.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+프로젝트 Objective / Goal / Non-Goal
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-확장 내용
-─────────
-1. HttpJsonClient       : 재시도(Retry) + 지수 백오프 정책 강화
-2. EDCAsset             : Catena-X v0.0.1/ns 컨텍스트, AAS semanticId 지원
-3. EDCPolicy            : ODRL 팩토리 메서드 (BPN / 멤버십 / 개방 정책)
-4. ContractDefinition   : 변경 없음 (원본 유지)
-5. FactoryCobotTelemetry: 관절 토크·속도·힘-토크 센서, 안전 상태, 진단 필드 추가
-6. AASBridge            : AAS Part 2(IDTA-01002-3-0) REST v3 준수
-                          · Shell / Submodel 자동 생성·갱신 (upsert)
-                          · SubmodelElementCollection 구조적 매핑
-                          · 레지스트리(shell-descriptors) 등록 지원
-7. EDCConnectorService  : 카탈로그 조회, 협상 상태 폴링, 데이터 전송 시작
-8. CobotEDCPipeline     : 온보딩 + AAS 동기화 + 협상-전송 워크플로
-9. build_pipeline_from_env / main : 원본 CLI 구조 유지, 커맨드 추가
+Objective
+    공장 협동로봇 텔레메트리를 Catena-X 데이터스페이스 표준(EDC + AAS)으로
+    등록·관리·공유할 수 있는 샘플 플랫폼을 구현한다.
 
-표준 참조
-─────────
-- Eclipse EDC (Tractus-X) Management API v3
-- IDS / DSP (Dataspace Protocol) v2024-1
-- IDTA AAS Part 2 (IDTA-01002-3-0) REST
-- IDTA Submodel Template 협동로봇 (IDTA-02017)
-- Catena-X ODRL Profile (catenax-eV/cx-odrl-profile)
+Goal
+    ✔ raw telemetry → 전처리 → AAS Submodel 저장/갱신
+    ✔ EDC 에셋/정책/컨트랙트를 로컬 저장소에 등록
+    ✔ 로컬 카탈로그 조회 (export-catalog)
+    ✔ Ollama AI 보조 검증 (선택적, --use-ai)
+    ✔ sample_telemetry.json으로 즉시 테스트 가능
+    ✔ Mock ↔ 실제 EDC/BaSyx 전환 경계 명확화
+
+Non-Goal
+    ✘ 실제 EDC 컨트랙트 협상·데이터 전송 (Mock 수준)
+    ✘ AAS 레지스트리 원격 동기화 (Mock 수준)
+    ✘ 멀티 테넌시, 인증/인가 (샘플 수준)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+전체 데이터 흐름 (6단계)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  sample_telemetry.json
+         │
+         ▼  [Step 1] raw data mapping
+  RawTelemetry
+         │
+         ▼  [Step 2] 전처리 (임계값 검사, 품질 플래그, 수율 계산)
+  NormalizedTelemetry ──[Step 5]──→ Ollama AI 검증 (optional)
+         │
+         ▼  [Step 3] AAS 매핑 (IDTA-02017 SubmodelElementCollection 구조)
+  AASShell + AASSubmodel
+         │
+         ├──[Step 4]──→ EDCAsset + EDCPolicy + ContractDefinition
+         │               store/edc/assets.json
+         │               store/edc/policies.json
+         │               store/edc/contracts.json
+         │               store/edc/catalog.json
+         │
+         └──[Step 6]──→ AAS upsert (INSERT or UPDATE)
+                         store/aas/{robot_id}_shell.json
+                         store/aas/{robot_id}_submodel.json
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Mock ↔ Real 전환 경계
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  EDCStore  → 로컬 JSON 파일 (Mock)
+              실제 연동: CATENAX_EDC_MANAGEMENT_URL 설정 시 EDCHttpClient 자동 활성화
+  AASStore  → 로컬 JSON 파일 (Mock)
+              실제 연동: CATENAX_AAS_BASE_URL 설정 시 BaSyxAASClient 자동 활성화
 """
 
 from __future__ import annotations
@@ -33,1149 +61,967 @@ import argparse
 import json
 import logging
 import os
+import re
+import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 로거
-# ──────────────────────────────────────────────────────────────────────────────
+# ── 패키지 경로 보정 ─────────────────────────────────────────────────────────
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+from models import (
+    AASShell,
+    AASStoreError,
+    AASSubmodel,
+    CatalogEntry,
+    ContractDefinition,
+    EDCAsset,
+    EDCPolicy,
+    EDCStoreError,
+    InvalidTelemetryError,
+    NormalizedTelemetry,
+    QualityFlag,
+    RawTelemetry,
+)
+from aas_mapper import AASMapper, TelemetryPreprocessor, TelemetryThresholds
+
+# Ollama AI 보조 — import 실패해도 시스템 동작 보장
+try:
+    from ai_helpers import (
+        OllamaUnavailableError,
+        check_ollama_available,
+        suggest_policy_with_ai,
+        validate_with_ai,
+    )
+    _AI_AVAILABLE = True
+except ImportError:
+    _AI_AVAILABLE = False
+
 LOGGER = logging.getLogger("catenax.edc")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 경로/유틸
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _store_root() -> Path:
+    # GitHub 기본: CATENAX_STORE_DIR — 기존 로컬 실험과 호환: CATENAX_MOCK_DATA_DIR 도 허용
+    base = os.environ.get("CATENAX_STORE_DIR") or os.environ.get("CATENAX_MOCK_DATA_DIR")
+    d = Path(base or str(_HERE / "store"))
+    (d / "aas").mkdir(parents=True, exist_ok=True)
+    (d / "edc").mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _iter_telemetry_records(raw: Any) -> List[Dict[str, Any]]:
+    """이미 파싱된 JSON(객체 또는 배열)에서 레코드 리스트 — 대시보드·레거시 호환."""
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        out: List[Dict[str, Any]] = []
+        for i, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise ValueError(f"텔레메트리 배열 요소 {i}는 객체여야 합니다.")
+            out.append(item)
+        if not out:
+            raise ValueError("텔레메트리 JSON 배열이 비어 있습니다.")
+        return out
+    raise ValueError(f"텔레메트리는 객체 또는 배열이어야 합니다: {type(raw).__name__}")
+
+
+def _load_telemetry_records(path: Path) -> List[Dict[str, Any]]:
+    """파일에서 JSON 읽어 ``_iter_telemetry_records`` 로 정규화."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return _iter_telemetry_records(raw)
+
+
+def run_onboard_from_records(
+    pipeline: CobotEDCPipeline,
+    records: List[Dict[str, Any]],
+    *,
+    provider_bpn: str,
+    cobot_api_base_url: str = "http://localhost:8080",
+    cobot_data_path: str = "/api/v1/cobot/telemetry",
+    policy_type: str = "bpn",
+) -> Dict[str, Any]:
+    """레코드마다 ``onboard`` 실행 — 예전 ``ingest_*`` 대체."""
+    results: List[Dict[str, Any]] = []
+    for raw in records:
+        results.append(
+            pipeline.onboard(
+                raw_dict=raw,
+                provider_bpn=provider_bpn,
+                cobot_api_base_url=cobot_api_base_url,
+                cobot_data_path=cobot_data_path,
+                policy_type=policy_type,
+            )
+        )
+    if len(results) == 1:
+        return {"record_count": 1, "results": results, **results[0]}
+    return {"record_count": len(results), "results": results}
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# HTTP 클라이언트 (표준 라이브러리, 재시도 포함)
-# ──────────────────────────────────────────────────────────────────────────────
+def _safe_filename(value: str) -> str:
+    return re.sub(r"[^\w\-]", "_", value)
 
-class HttpJsonClient:
-    """표준 라이브러리 기반 JSON-over-HTTP 클라이언트.
 
-    5xx / 연결 오류 시 지수 백오프(exponential back-off) 재시도를 수행합니다.
-    라즈베리파이 등 경량 환경에서도 의존성 없이 동작합니다.
+def _make_asset_id(robot_id: str) -> str:
+    """robot_id 기반 EDC 에셋 ID 생성 규칙."""
+    return f"urn:catenax:cobot:{robot_id}:telemetry"
+
+
+def _make_policy(policy_id: str, target: str, policy_type: str, bpn: str) -> EDCPolicy:
+    """정책 유형 문자열 → EDCPolicy 객체."""
+    if policy_type == "membership":
+        return EDCPolicy.membership(policy_id, target)
+    if policy_type == "open":
+        return EDCPolicy.open_access(policy_id, target)
+    return EDCPolicy.bpn_restricted(policy_id, target, bpn)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# AAS 로컬 저장소
+# ═════════════════════════════════════════════════════════════════════════════
+
+class AASStore:
+    """AAS Shell과 Submodel을 로컬 JSON 파일로 저장·조회.
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Mock 경계 — 실제 BaSyx AAS Server 연동 시 교체
+      현재: store/aas/*.json 로컬 파일
+      목표: BaSyx REST API (PUT /shells, PUT /submodels)
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    """
+
+    def __init__(self, store_root: Optional[Path] = None):
+        self._root = (store_root or _store_root()) / "aas"
+        self._root.mkdir(parents=True, exist_ok=True)
+
+    def upsert_shell(self, shell: AASShell) -> Dict[str, Any]:
+        """Shell upsert: 없으면 INSERT, 있으면 UPDATE (created_at 보존).
+
+        실제 BaSyx 연동 시 → POST /shells (신규) / PUT /shells/{id} (갱신)
+        """
+        path      = self._root / f"{_safe_filename(shell.shell_id)}_shell.json"
+        is_update = path.exists()
+
+        if is_update:
+            existing       = json.loads(path.read_text(encoding="utf-8"))
+            shell.created_at = existing.get("_meta", {}).get("created_at", _utc_now())
+            shell.updated_at = _utc_now()
+
+        path.write_text(json.dumps(shell.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        action = "UPDATED" if is_update else "CREATED"
+        LOGGER.info("AAS Shell %s: %s", action, shell.shell_id)
+        return {"action": action, "shell_id": shell.shell_id, "path": str(path)}
+
+    def upsert_submodel(self, submodel: AASSubmodel) -> Dict[str, Any]:
+        """Submodel upsert: 없으면 INSERT, 있으면 UPDATE.
+
+        실제 BaSyx 연동 시 → POST /submodels (신규) / PUT /submodels/{id} (갱신)
+        """
+        path      = self._root / f"{_safe_filename(submodel.submodel_id)}_submodel.json"
+        is_update = path.exists()
+
+        if is_update:
+            existing           = json.loads(path.read_text(encoding="utf-8"))
+            submodel.created_at = existing.get("_meta", {}).get("created_at", _utc_now())
+            submodel.updated_at = _utc_now()
+
+        path.write_text(json.dumps(submodel.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        action = "UPDATED" if is_update else "CREATED"
+        LOGGER.info("AAS Submodel %s: %s", action, submodel.submodel_id)
+        return {"action": action, "submodel_id": submodel.submodel_id, "path": str(path)}
+
+    def get_shell(self, shell_id: str) -> Optional[Dict[str, Any]]:
+        path = self._root / f"{_safe_filename(shell_id)}_shell.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def get_submodel(self, submodel_id: str) -> Optional[Dict[str, Any]]:
+        path = self._root / f"{_safe_filename(submodel_id)}_submodel.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def list_shells(self) -> List[Dict[str, Any]]:
+        return [json.loads(p.read_text(encoding="utf-8"))
+                for p in sorted(self._root.glob("*_shell.json"))]
+
+    def list_submodels(self) -> List[Dict[str, Any]]:
+        return [json.loads(p.read_text(encoding="utf-8"))
+                for p in sorted(self._root.glob("*_submodel.json"))]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# EDC 로컬 저장소
+# ═════════════════════════════════════════════════════════════════════════════
+
+class EDCStore:
+    """EDC 에셋/정책/컨트랙트/카탈로그를 로컬 JSON 파일로 저장·조회.
+
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Mock 경계 — 실제 EDC Management API 연동 시 교체
+      현재: store/edc/*.json 로컬 파일
+      목표: EDC Management API v3
+            POST /v3/assets
+            POST /v3/policydefinitions
+            POST /v3/contractdefinitions
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    """
+
+    def __init__(self, store_root: Optional[Path] = None):
+        self._root = (store_root or _store_root()) / "edc"
+        self._root.mkdir(parents=True, exist_ok=True)
+
+    # ── 에셋 ──────────────────────────────────────────────────────────────────
+
+    def register_asset(self, asset: EDCAsset) -> Dict[str, Any]:
+        """에셋 등록. 실제 EDC 연동 시 → POST /v3/assets"""
+        store                = self._load("assets.json")
+        store[asset.asset_id] = asset.to_dict()
+        self._save("assets.json", store)
+        LOGGER.info("EDC 에셋 등록: %s", asset.asset_id)
+        return {"registered": True, "asset_id": asset.asset_id}
+
+    def get_asset(self, asset_id: str) -> Optional[Dict[str, Any]]:
+        return self._load("assets.json").get(asset_id)
+
+    def list_assets(self) -> List[Dict[str, Any]]:
+        return list(self._load("assets.json").values())
+
+    # ── 정책 ──────────────────────────────────────────────────────────────────
+
+    def register_policy(self, policy: EDCPolicy) -> Dict[str, Any]:
+        """정책 등록. 실제 EDC 연동 시 → POST /v3/policydefinitions"""
+        store                  = self._load("policies.json")
+        store[policy.policy_id] = policy.to_dict()
+        self._save("policies.json", store)
+        LOGGER.info("EDC 정책 등록: %s [%s]", policy.policy_id, policy.policy_type.value)
+        return {"registered": True, "policy_id": policy.policy_id}
+
+    def list_policies(self) -> List[Dict[str, Any]]:
+        return list(self._load("policies.json").values())
+
+    # ── 컨트랙트 정의 ─────────────────────────────────────────────────────────
+
+    def register_contract(self, contract: ContractDefinition) -> Dict[str, Any]:
+        """컨트랙트 등록. 실제 EDC 연동 시 → POST /v3/contractdefinitions"""
+        store                                  = self._load("contracts.json")
+        store[contract.contract_definition_id]  = contract.to_dict()
+        self._save("contracts.json", store)
+        LOGGER.info("EDC 컨트랙트 등록: %s", contract.contract_definition_id)
+        return {"registered": True, "contract_id": contract.contract_definition_id}
+
+    def list_contracts(self) -> List[Dict[str, Any]]:
+        return list(self._load("contracts.json").values())
+
+    # ── 카탈로그 ──────────────────────────────────────────────────────────────
+
+    def upsert_catalog_entry(self, entry: CatalogEntry) -> Dict[str, Any]:
+        store                  = self._load("catalog.json")
+        store[entry.asset_id]  = entry.to_dict()
+        self._save("catalog.json", store)
+        LOGGER.info("카탈로그 갱신: %s", entry.asset_id)
+        return {"updated": True, "asset_id": entry.asset_id}
+
+    def list_catalog(self) -> List[Dict[str, Any]]:
+        return list(self._load("catalog.json").values())
+
+    # ── 파일 IO ───────────────────────────────────────────────────────────────
+
+    def _load(self, filename: str) -> Dict[str, Any]:
+        path = self._root / filename
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise EDCStoreError(f"{filename} 읽기 실패: {exc}") from exc
+
+    def _save(self, filename: str, data: Dict[str, Any]) -> None:
+        path = self._root / filename
+        try:
+            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:
+            raise EDCStoreError(f"{filename} 쓰기 실패: {exc}") from exc
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 실제 EDC HTTP 클라이언트 (환경변수 설정 시 자동 활성화)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class EDCHttpClient:
+    """Eclipse EDC Management API v3 HTTP 클라이언트.
+
+    CATENAX_EDC_MANAGEMENT_URL 환경변수가 설정되면 자동 활성화됩니다.
+    Mock → Real 전환: CobotEDCPipeline에 이 클라이언트를 주입하세요.
+
+    실제 연동 예시:
+        export CATENAX_EDC_MANAGEMENT_URL=http://edc-provider:8080/management
+        export CATENAX_EDC_API_KEY=your-key
+        python3 edc.py onboard --telemetry-json sample_telemetry.json ...
     """
 
     RETRYABLE_CODES = {429, 500, 502, 503, 504}
 
-    def __init__(self, timeout: float = 15.0, max_retries: int = 3):
-        self.timeout = timeout
-        self.max_retries = max_retries
+    def __init__(self, management_url: str, api_key: Optional[str] = None,
+                 timeout: float = 15.0, max_retries: int = 3):
+        self.management_url = management_url.rstrip("/")
+        self.api_key        = api_key
+        self.timeout        = timeout
+        self.max_retries    = max_retries
 
-    def request_json(
-        self,
-        method: str,
-        url: str,
-        payload: Optional[Mapping[str, Any]] = None,
-        headers: Optional[Mapping[str, str]] = None,
-    ) -> Dict[str, Any]:
-        body: Optional[bytes] = None
-        final_headers: Dict[str, str] = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if headers:
-            final_headers.update(headers)
-        if payload is not None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def _headers(self) -> Dict[str, str]:
+        h = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key:
+            h["X-Api-Key"] = self.api_key
+        return h
 
-        attempt = 0
-        last_exc: Exception = RuntimeError("No attempts made")
-        while attempt <= self.max_retries:
+    def _request(self, method: str, path: str, payload: Optional[Dict] = None) -> Dict[str, Any]:
+        url  = f"{self.management_url}{path}"
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload else None
+        req  = urllib.request.Request(url, data=body, headers=self._headers(), method=method)
+        for attempt in range(self.max_retries + 1):
             try:
-                req = urllib.request.Request(url, data=body, headers=final_headers, method=method)
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     raw = resp.read().decode("utf-8").strip()
                 return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", errors="replace")
                 if exc.code in self.RETRYABLE_CODES and attempt < self.max_retries:
-                    wait = 2 ** attempt
-                    LOGGER.warning("HTTP %s %s → %ds 후 재시도 (%d/%d)", exc.code, url, wait, attempt + 1, self.max_retries)
-                    time.sleep(wait)
-                    attempt += 1
-                    last_exc = RuntimeError(f"HTTP {exc.code}: {detail}")
+                    time.sleep(2 ** attempt)
                     continue
-                raise RuntimeError(f"HTTP {exc.code} calling {url}: {detail}") from exc
+                raise RuntimeError(f"HTTP {exc.code} {url}: {detail}") from exc
             except urllib.error.URLError as exc:
                 if attempt < self.max_retries:
-                    wait = 2 ** attempt
-                    LOGGER.warning("연결 실패 %s → %ds 후 재시도 (%d/%d)", url, wait, attempt + 1, self.max_retries)
-                    time.sleep(wait)
-                    attempt += 1
-                    last_exc = RuntimeError(f"URLError: {exc.reason}")
+                    time.sleep(2 ** attempt)
                     continue
-                raise RuntimeError(f"Failed to reach {url}: {exc.reason}") from exc
-        raise last_exc
+                raise RuntimeError(f"연결 실패 {url}: {exc.reason}") from exc
+        raise RuntimeError("최대 재시도 초과")
+
+    def register_asset(self, asset: EDCAsset) -> Dict[str, Any]:
+        return self._request("POST", "/v3/assets", asset.to_management_payload())
+
+    def register_policy(self, policy: EDCPolicy) -> Dict[str, Any]:
+        return self._request("POST", "/v3/policydefinitions", policy.to_management_payload())
+
+    def register_contract(self, contract: ContractDefinition) -> Dict[str, Any]:
+        return self._request("POST", "/v3/contractdefinitions", contract.to_management_payload())
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# EDC 데이터 모델
-# ──────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# 실제 BaSyx AAS HTTP 클라이언트
+# ═════════════════════════════════════════════════════════════════════════════
 
-@dataclass(slots=True)
-class EDCAsset:
-    """EDC 에셋 정의.
+class BaSyxAASClient:
+    """BaSyx AAS Server v3 REST API 클라이언트.
 
-    Catena-X 네임스페이스(w3id.org/edc/v0.0.1/ns)와
-    AAS semanticId(IDTA-02017)를 포함합니다.
+    CATENAX_AAS_BASE_URL 환경변수가 설정되면 자동 활성화됩니다.
     """
 
-    asset_id: str
-    name: str
-    base_url: str
-    data_path: str
-    description: str
-    content_type: str = "application/json"
-    provider_bpn: str = ""
-    asset_type: str = "factory-cobot-telemetry"
-    semantic_id: str = ""          # AAS Submodel SemanticId
-    extra_properties: Dict[str, Any] = field(default_factory=dict)
-
-    def to_management_payload(self) -> Dict[str, Any]:
-        props: Dict[str, Any] = {
-            "asset:prop:id": self.asset_id,
-            "asset:prop:name": self.name,
-            "asset:prop:contenttype": self.content_type,
-            "asset:prop:description": self.description,
-            "catenax:assetType": self.asset_type,
-        }
-        if self.provider_bpn:
-            props["catenax:providerBpn"] = self.provider_bpn
-        if self.semantic_id:
-            props["catenax:semanticId"] = self.semantic_id
-            props["aas:semanticId"] = self.semantic_id
-        props.update(self.extra_properties)
-
-        return {
-            "@context": {
-                "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
-                "cx-common": "https://w3id.org/catenax/ontology/common#",
-                "aas": "https://admin-shell.io/aas/3/0/",
-            },
-            "@id": self.asset_id,
-            "properties": props,
-            "dataAddress": {
-                "@type": "HttpData",
-                "type": "HttpData",
-                "baseUrl": self.base_url.rstrip("/"),
-                "path": self.data_path,
-                "proxyMethod": "true",
-                "proxyPath": "true",
-                "proxyQueryParams": "true",
-                "proxyBody": "true",
-            },
-        }
-
-
-@dataclass(slots=True)
-class EDCPolicy:
-    """ODRL 정책 정의 (Catena-X ODRL Profile 준수).
-
-    팩토리 메서드로 자주 쓰이는 정책 유형을 쉽게 생성할 수 있습니다.
-    """
-
-    policy_id: str
-    target: str
-    permissions: List[Dict[str, Any]] = field(default_factory=list)
-
-    # ── 팩토리 메서드 ─────────────────────────────────────────────────────────
-
-    @classmethod
-    def bpn_restricted(cls, policy_id: str, target: str, allowed_bpn: str) -> "EDCPolicy":
-        """특정 BPN만 허용하는 정책."""
-        return cls(
-            policy_id=policy_id,
-            target=target,
-            permissions=[{
-                "action": "USE",
-                "constraint": {
-                    "leftOperand": "BusinessPartnerNumber",
-                    "operator": "EQ",
-                    "rightOperand": allowed_bpn,
-                },
-                "target": target,
-            }],
-        )
-
-    @classmethod
-    def membership(cls, policy_id: str, target: str) -> "EDCPolicy":
-        """Catena-X 멤버십 보유자 전체 허용 정책."""
-        return cls(
-            policy_id=policy_id,
-            target=target,
-            permissions=[{
-                "action": "USE",
-                "constraint": {
-                    "leftOperand": "Membership",
-                    "operator": "EQ",
-                    "rightOperand": "active",
-                },
-                "target": target,
-            }],
-        )
-
-    @classmethod
-    def open_access(cls, policy_id: str, target: str) -> "EDCPolicy":
-        """제약 없는 개방 정책 (내부 테스트용)."""
-        return cls(
-            policy_id=policy_id,
-            target=target,
-            permissions=[{"action": "USE", "target": target}],
-        )
-
-    # ── 직렬화 ────────────────────────────────────────────────────────────────
-
-    def to_management_payload(self) -> Dict[str, Any]:
-        return {
-            "@context": {
-                "@vocab": "https://w3id.org/edc/v0.0.1/ns/",
-                "odrl": "http://www.w3.org/ns/odrl/2/",
-            },
-            "@id": self.policy_id,
-            "@type": "PolicyDefinition",
-            "policy": {
-                "@context": "http://www.w3.org/ns/odrl.jsonld",
-                "@type": "Set",
-                "permission": self.permissions,
-            },
-        }
-
-
-@dataclass(slots=True)
-class ContractDefinition:
-    """에셋 선택기와 정책을 묶는 컨트랙트 정의 (원본 BerePi 구조 유지)."""
-
-    contract_definition_id: str
-    access_policy_id: str
-    contract_policy_id: str
-    asset_id: str
-
-    def to_management_payload(self) -> Dict[str, Any]:
-        return {
-            "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
-            "@id": self.contract_definition_id,
-            "@type": "ContractDefinition",
-            "accessPolicyId": self.access_policy_id,
-            "contractPolicyId": self.contract_policy_id,
-            "assetsSelector": [
-                {
-                    "@type": "Criterion",
-                    "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
-                    "operator": "=",
-                    "operandRight": self.asset_id,
-                }
-            ],
-        }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 협동로봇 텔레메트리 모델
-# ──────────────────────────────────────────────────────────────────────────────
-
-@dataclass(slots=True)
-class FactoryCobotTelemetry:
-    """공장 협동로봇 텔레메트리 (IDTA-02017 Cobot Submodel Template 기반).
-
-    필수 필드 (원본 BerePi)
-    ────────────────────────
-    robot_id, line_id, station_id, cycle_time_ms, power_watts,
-    program_name, status
-
-    선택 필드 (원본 BerePi)
-    ────────────────────────
-    good_parts, reject_parts, temperature_c, vibration_mm_s,
-    pose, joint_positions_deg, alarms, produced_at
-
-    확장 필드 (이번 구현)
-    ─────────────────────
-    joint_velocities_deg_s  : 관절 각속도 (deg/s)
-    joint_torques_nm        : 관절 토크 (Nm)
-    force_torque            : 엔드이펙터 힘·토크 (Fx Fy Fz Tx Ty Tz)
-    safety_state            : 안전 상태 NORMAL / REDUCED / STOP
-    payload_kg              : 현재 페이로드 (kg)
-    speed_override_pct      : 속도 오버라이드 (0~100 %)
-    total_operating_hours   : 누적 가동 시간 (h)
-    uptime_ratio            : 가동률 0.0~1.0
-    error_code              : 마지막 에러 코드
-    diagnostics             : 진단 키-값 딕셔너리
-    """
-
-    # 필수
-    robot_id: str
-    line_id: str
-    station_id: str
-    cycle_time_ms: float
-    power_watts: float
-    program_name: str
-    status: str                                         # RUNNING / IDLE / ERROR / STOP
-
-    # 선택(원본)
-    good_parts: int = 0
-    reject_parts: int = 0
-    temperature_c: Optional[float] = None
-    vibration_mm_s: Optional[float] = None
-    pose: Dict[str, float] = field(default_factory=dict)            # x y z rx ry rz (mm/deg)
-    joint_positions_deg: Dict[str, float] = field(default_factory=dict)
-    alarms: List[str] = field(default_factory=list)
-    produced_at: str = field(default_factory=_utc_now)
-
-    # 선택(확장)
-    joint_velocities_deg_s: Dict[str, float] = field(default_factory=dict)
-    joint_torques_nm: Dict[str, float] = field(default_factory=dict)
-    force_torque: Dict[str, float] = field(default_factory=dict)    # Fx Fy Fz Tx Ty Tz
-    safety_state: str = "NORMAL"
-    payload_kg: float = 0.0
-    speed_override_pct: float = 100.0
-    total_operating_hours: float = 0.0
-    uptime_ratio: float = 0.0
-    error_code: str = ""
-    diagnostics: Dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "FactoryCobotTelemetry":
-        def _float_opt(key: str) -> Optional[float]:
-            v = raw.get(key)
-            return float(v) if v is not None else None
-
-        def _str_float_map(key: str) -> Dict[str, float]:
-            return {str(k): float(v) for k, v in raw.get(key, {}).items()}
-
-        return cls(
-            robot_id=str(raw["robot_id"]),
-            line_id=str(raw["line_id"]),
-            station_id=str(raw["station_id"]),
-            cycle_time_ms=float(raw["cycle_time_ms"]),
-            power_watts=float(raw["power_watts"]),
-            program_name=str(raw["program_name"]),
-            status=str(raw["status"]),
-            good_parts=int(raw.get("good_parts", 0)),
-            reject_parts=int(raw.get("reject_parts", 0)),
-            temperature_c=_float_opt("temperature_c"),
-            vibration_mm_s=_float_opt("vibration_mm_s"),
-            pose=_str_float_map("pose"),
-            joint_positions_deg=_str_float_map("joint_positions_deg"),
-            alarms=[str(a) for a in raw.get("alarms", [])],
-            produced_at=str(raw.get("produced_at", _utc_now())),
-            joint_velocities_deg_s=_str_float_map("joint_velocities_deg_s"),
-            joint_torques_nm=_str_float_map("joint_torques_nm"),
-            force_torque=_str_float_map("force_torque"),
-            safety_state=str(raw.get("safety_state", "NORMAL")),
-            payload_kg=float(raw.get("payload_kg", 0.0)),
-            speed_override_pct=float(raw.get("speed_override_pct", 100.0)),
-            total_operating_hours=float(raw.get("total_operating_hours", 0.0)),
-            uptime_ratio=float(raw.get("uptime_ratio", 0.0)),
-            error_code=str(raw.get("error_code", "")),
-            diagnostics=dict(raw.get("diagnostics", {})),
-        )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# AAS 브릿지 (BaSyx AAS Server v3 REST API)
-# ──────────────────────────────────────────────────────────────────────────────
-
-class AASBridge:
-    """협동로봇 텔레메트리를 AAS Submodel 형식으로 변환하고 서버에 업서트합니다.
-
-    AAS Part 2(IDTA-01002-3-0) REST API v3 엔드포인트:
-        POST /shells                  → Shell 생성
-        PUT  /submodels/{id}          → Submodel 교체(upsert)
-        POST /submodels               → Submodel 신규 생성
-        POST /shell-descriptors       → 레지스트리 등록
-
-    SubmodelElementCollection 구조 (IDTA-02017 기반):
-        OperationalState      : 상태, 프로그램, 타임스탬프, 페이로드
-        ProductionMetrics     : 부품 수량, 사이클 타임, 전력, 온도, 진동
-        KinematicState        : 포즈, 관절 위치·속도·토크
-        ForceTorqueSensor     : 엔드이펙터 힘·토크 (Fx Fy Fz Tx Ty Tz)
-        SafetyAndDiagnostics  : 안전 상태, 알람, 에러 코드, 진단 데이터
-    """
-
-    # IDTA-02017 협동로봇 Submodel SemanticId
-    COBOT_SEMANTIC_ID = "https://admin-shell.io/idta/CobotOperationalData/1/0"
-
-    def __init__(
-        self,
-        aas_base_url: str,
-        submodel_id: str,
-        client: Optional[HttpJsonClient] = None,
-        auth_key: Optional[str] = None,
-        registry_url: Optional[str] = None,
-        shell_id: Optional[str] = None,
-    ):
+    def __init__(self, aas_base_url: str, auth_key: Optional[str] = None,
+                 timeout: float = 15.0):
         self.aas_base_url = aas_base_url.rstrip("/")
-        self.submodel_id = submodel_id
-        self.client = client or HttpJsonClient()
-        self.auth_key = auth_key
-        self.registry_url = (registry_url or "").rstrip("/")
-        # shell_id 미지정 시 submodel_id에서 자동 생성
-        self.shell_id = shell_id or submodel_id.replace("submodel", "shell")
-
-    # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────
+        self.auth_key     = auth_key
+        self.timeout      = timeout
 
     def _headers(self) -> Dict[str, str]:
-        h: Dict[str, str] = {}
+        h = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.auth_key:
             h["X-Api-Key"] = self.auth_key
         return h
 
-    @staticmethod
-    def _value_type(value: Any) -> str:
-        if isinstance(value, bool):
-            return "xs:boolean"
-        if isinstance(value, int):
-            return "xs:integer"
-        if isinstance(value, float):
-            return "xs:double"
-        return "xs:string"
+    def _req(self, method: str, url: str, payload: Optional[Dict] = None) -> Dict[str, Any]:
+        import urllib.parse as _up
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload else None
+        req  = urllib.request.Request(url, data=body, headers=self._headers(), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read().decode("utf-8").strip()
+            return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"HTTP {exc.code} {url}: {exc.read().decode()}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"연결 실패 {url}: {exc.reason}") from exc
 
-    @staticmethod
-    def _prop(id_short: str, value: Any) -> Dict[str, Any]:
-        """단순 Property SME 생성 헬퍼."""
-        return {
-            "modelType": "Property",
-            "idShort": id_short,
-            "valueType": AASBridge._value_type(value),
-            "value": str(value) if not isinstance(value, str) else value,
-        }
-
-    @staticmethod
-    def _collection(id_short: str, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """SubmodelElementCollection SME 생성 헬퍼."""
-        return {
-            "modelType": "SubmodelElementCollection",
-            "idShort": id_short,
-            "value": elements,
-        }
-
-    # ── 텔레메트리 → AAS Submodel 변환 ──────────────────────────────────────
-
-    def telemetry_to_submodel(self, t: FactoryCobotTelemetry) -> Dict[str, Any]:
-        """FactoryCobotTelemetry → AAS Submodel (IDTA-02017 구조) 변환."""
-        elements: List[Dict[str, Any]] = [
-
-            # OperationalState
-            self._collection("OperationalState", [
-                self._prop("RobotId", t.robot_id),
-                self._prop("LineId", t.line_id),
-                self._prop("StationId", t.station_id),
-                self._prop("Status", t.status),
-                self._prop("ProgramName", t.program_name),
-                self._prop("ProducedAt", t.produced_at),
-                self._prop("PayloadKg", t.payload_kg),
-                self._prop("SpeedOverridePct", t.speed_override_pct),
-                self._prop("TotalOperatingHours", t.total_operating_hours),
-                self._prop("UptimeRatio", t.uptime_ratio),
-            ]),
-
-            # ProductionMetrics
-            self._collection("ProductionMetrics", [
-                self._prop("CycleTimeMs", t.cycle_time_ms),
-                self._prop("PowerWatts", t.power_watts),
-                self._prop("GoodParts", t.good_parts),
-                self._prop("RejectParts", t.reject_parts),
-                *([self._prop("TemperatureC", t.temperature_c)] if t.temperature_c is not None else []),
-                *([self._prop("VibrationMmPerSec", t.vibration_mm_s)] if t.vibration_mm_s is not None else []),
-            ]),
-
-            # KinematicState : 포즈 + 관절 위치·속도·토크
-            self._collection("KinematicState", [
-                self._collection("EndEffectorPose", [
-                    self._prop(axis.upper(), val) for axis, val in t.pose.items()
-                ]),
-                self._collection("JointPositionsDeg", [
-                    self._prop(j, v) for j, v in t.joint_positions_deg.items()
-                ]),
-                self._collection("JointVelocitiesDegS", [
-                    self._prop(j, v) for j, v in t.joint_velocities_deg_s.items()
-                ]),
-                self._collection("JointTorquesNm", [
-                    self._prop(j, v) for j, v in t.joint_torques_nm.items()
-                ]),
-            ]),
-
-            # ForceTorqueSensor : Fx Fy Fz Tx Ty Tz
-            self._collection("ForceTorqueSensor", [
-                self._prop(k, v) for k, v in t.force_torque.items()
-            ]),
-
-            # SafetyAndDiagnostics
-            self._collection("SafetyAndDiagnostics", [
-                self._prop("SafetyState", t.safety_state),
-                self._prop("ErrorCode", t.error_code),
-                self._prop("AlarmCount", len(t.alarms)),
-                self._prop("Alarms", json.dumps(t.alarms, ensure_ascii=False)),
-                *[self._prop(f"Diag_{k}", v) for k, v in t.diagnostics.items()],
-            ]),
-        ]
-
-        return {
-            "modelType": "Submodel",
-            "id": self.submodel_id,
-            "idShort": "CobotOperationalData",
-            "semanticId": {
-                "type": "ExternalReference",
-                "keys": [{"type": "GlobalReference", "value": self.COBOT_SEMANTIC_ID}],
-            },
-            "submodelElements": elements,
-        }
-
-    # ── AAS Shell 생성 ────────────────────────────────────────────────────────
-
-    def ensure_shell(self, robot_id: str, manufacturer: str = "") -> Dict[str, Any]:
-        """Shell이 없으면 생성합니다 (이미 있으면 스킵)."""
-        shell_payload: Dict[str, Any] = {
-            "modelType": "AssetAdministrationShell",
-            "id": self.shell_id,
-            "idShort": f"Cobot_{robot_id.replace('-', '_')}",
-            "assetInformation": {
-                "assetKind": "Instance",
-                "globalAssetId": f"urn:cobot:{robot_id}",
-            },
-            "description": [{"language": "ko", "text": f"협동로봇 {robot_id} AAS Shell"}],
-            "submodels": [{"type": "ExternalReference", "keys": [
-                {"type": "Submodel", "value": self.submodel_id}
-            ]}],
-        }
-        if manufacturer:
-            shell_payload["assetInformation"]["specificAssetIds"] = [
-                {"name": "manufacturer", "value": manufacturer}
-            ]
-
+    def upsert_shell(self, shell: AASShell) -> Dict[str, Any]:
         url = f"{self.aas_base_url}/shells"
         try:
-            result = self.client.request_json("POST", url, payload=shell_payload, headers=self._headers())
-            LOGGER.info("AAS Shell 생성: %s", self.shell_id)
-            return result
-        except RuntimeError as exc:
-            if "409" in str(exc) or "already" in str(exc).lower():
-                LOGGER.debug("AAS Shell 이미 존재: %s", self.shell_id)
-                return {"id": self.shell_id, "status": "already_exists"}
-            raise
-
-    # ── Submodel 업서트 ───────────────────────────────────────────────────────
-
-    def upsert_telemetry(self, telemetry: FactoryCobotTelemetry) -> Dict[str, Any]:
-        """Submodel을 생성하거나 전체 교체(PUT)합니다.
-
-        BaSyx AAS Server v3 기준:
-        - PUT /submodels/{encodedId} : 존재하면 교체, 없으면 404
-        - POST /submodels            : 신규 생성
-        """
-        payload = self.telemetry_to_submodel(telemetry)
-        headers = self._headers()
-        encoded_id = urllib.parse.quote(self.submodel_id, safe="")
-        put_url = f"{self.aas_base_url}/submodels/{encoded_id}"
-
-        try:
-            result = self.client.request_json("PUT", put_url, payload=payload, headers=headers)
-            LOGGER.info("AAS Submodel PUT 완료: robot_id=%s", telemetry.robot_id)
-            return result
-        except RuntimeError as exc:
-            if "404" not in str(exc):
-                raise
-            LOGGER.info("Submodel 미존재 → POST로 신규 생성")
-
-        post_url = f"{self.aas_base_url}/submodels"
-        result = self.client.request_json("POST", post_url, payload=payload, headers=headers)
-        LOGGER.info("AAS Submodel POST 완료: robot_id=%s", telemetry.robot_id)
-        return result
-
-    # ── AAS Registry 등록 ─────────────────────────────────────────────────────
-
-    def register_shell_descriptor(
-        self,
-        robot_id: str,
-        edc_data_plane_url: str,
-        asset_id: str,
-    ) -> Dict[str, Any]:
-        """AAS Registry(shell-descriptors)에 Shell Descriptor를 등록합니다.
-
-        소비자가 EDC를 통해 Submodel 데이터에 접근하는 DSP 엔드포인트를
-        submodelDescriptors.endpoints 에 기록합니다.
-        """
-        if not self.registry_url:
-            raise ValueError("registry_url이 설정되지 않았습니다 (CATENAX_AAS_REGISTRY_URL).")
-
-        descriptor = {
-            "id": self.shell_id,
-            "idShort": f"Cobot_{robot_id.replace('-', '_')}",
-            "assetKind": "Instance",
-            "globalAssetId": f"urn:cobot:{robot_id}",
-            "description": [{"language": "ko", "text": f"협동로봇 {robot_id}"}],
-            "submodelDescriptors": [
-                {
-                    "id": self.submodel_id,
-                    "idShort": "CobotOperationalData",
-                    "semanticId": {
-                        "type": "ExternalReference",
-                        "keys": [{"type": "GlobalReference", "value": self.COBOT_SEMANTIC_ID}],
-                    },
-                    "endpoints": [
-                        {
-                            "interface": "SUBMODEL-3.0",
-                            "protocolInformation": {
-                                "href": (
-                                    f"{edc_data_plane_url}/api/public/submodels/"
-                                    f"{urllib.parse.quote(self.submodel_id, safe='')}"
-                                ),
-                                "endpointProtocol": "HTTP",
-                                "endpointProtocolVersion": ["1.1"],
-                                "subprotocol": "DSP",
-                                "subprotocolBody": (
-                                    f"id={asset_id};dspEndpoint={edc_data_plane_url}"
-                                ),
-                                "subprotocolBodyEncoding": "plain",
-                            },
-                        }
-                    ],
-                }
-            ],
-        }
-
-        url = f"{self.registry_url}/shell-descriptors"
-        try:
-            result = self.client.request_json("POST", url, payload=descriptor, headers=self._headers())
-            LOGGER.info("AAS Registry 등록 완료: %s", self.shell_id)
-            return result
+            return self._req("POST", url, shell.to_dict())
         except RuntimeError as exc:
             if "409" in str(exc):
-                LOGGER.debug("Shell Descriptor 이미 존재 → PUT으로 갱신")
-                put_url = f"{url}/{urllib.parse.quote(self.shell_id, safe='')}"
-                return self.client.request_json("PUT", put_url, payload=descriptor, headers=self._headers())
+                import urllib.parse
+                return self._req("PUT", f"{url}/{urllib.parse.quote(shell.shell_id, safe='')}", shell.to_dict())
+            raise
+
+    def upsert_submodel(self, submodel: AASSubmodel) -> Dict[str, Any]:
+        import urllib.parse
+        enc = urllib.parse.quote(submodel.submodel_id, safe="")
+        try:
+            return self._req("PUT", f"{self.aas_base_url}/submodels/{enc}", submodel.to_dict())
+        except RuntimeError as exc:
+            if "404" in str(exc):
+                return self._req("POST", f"{self.aas_base_url}/submodels", submodel.to_dict())
             raise
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# EDC Management API 클라이언트
-# ──────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# CobotEDCPipeline — 핵심 오케스트레이터
+# ═════════════════════════════════════════════════════════════════════════════
 
-class EDCConnectorService:
-    """EDC Management API v3 래퍼.
+class CobotEDCPipeline:
+    """협동로봇 EDC + AAS 통합 파이프라인 오케스트레이터.
 
-    에셋·정책·컨트랙트 관리, 카탈로그 조회,
-    컨트랙트 협상 폴링, 데이터 전송 시작 기능을 제공합니다.
+    6단계 처리 흐름:
+    ─────────────────────────────────────────────────────
+    Step 1  _parse_raw()        raw dict → RawTelemetry
+    Step 2  _preprocess()       → NormalizedTelemetry
+    Step 3  _map_to_aas()       → AASShell + AASSubmodel
+    Step 4  _register_edc()     → EDCAsset/Policy/Contract 등록
+    Step 5  _ai_validate()      → Ollama 검증 (optional)
+    Step 6  _upsert_aas()       → AAS INSERT or UPDATE
+    ─────────────────────────────────────────────────────
+
+    Mock 모드:  edc_client=None, aas_client=None (기본값)
+    Real 모드:  edc_client=EDCHttpClient(), aas_client=BaSyxAASClient()
     """
 
     def __init__(
         self,
-        management_url: str,
-        client: Optional[HttpJsonClient] = None,
-        api_key: Optional[str] = None,
+        aas_store:  Optional[AASStore]       = None,
+        edc_store:  Optional[EDCStore]       = None,
+        edc_client: Optional[EDCHttpClient]  = None,  # None = Mock
+        aas_client: Optional[BaSyxAASClient] = None,  # None = Mock
+        thresholds: Optional[TelemetryThresholds] = None,
+        use_ai:     bool = False,
     ):
-        self.management_url = management_url.rstrip("/")
-        self.client = client or HttpJsonClient()
-        self.api_key = api_key
+        self._aas_store    = aas_store  or AASStore()
+        self._edc_store    = edc_store  or EDCStore()
+        self._edc_client   = edc_client
+        self._aas_client   = aas_client
+        self._preprocessor = TelemetryPreprocessor(thresholds)
+        self._mapper       = AASMapper()
+        self._use_ai       = use_ai and _AI_AVAILABLE
 
-    def _headers(self) -> Dict[str, str]:
-        h: Dict[str, str] = {}
-        if self.api_key:
-            h["X-Api-Key"] = self.api_key
-        return h
+    # ─────────────────────────────────────────────────────────────────────────
+    # 공개 API
+    # ─────────────────────────────────────────────────────────────────────────
 
-    # ── 에셋 ──────────────────────────────────────────────────────────────────
-
-    def register_asset(self, asset: EDCAsset) -> Dict[str, Any]:
-        url = f"{self.management_url}/v3/assets"
-        result = self.client.request_json("POST", url, payload=asset.to_management_payload(), headers=self._headers())
-        LOGGER.info("EDC 에셋 등록: %s", asset.asset_id)
-        return result
-
-    def list_assets(self, limit: int = 50) -> List[Dict[str, Any]]:
-        url = f"{self.management_url}/v3/assets/request"
-        result = self.client.request_json("POST", url, payload={"limit": limit}, headers=self._headers())
-        return result if isinstance(result, list) else result.get("items", [])
-
-    def delete_asset(self, asset_id: str) -> Dict[str, Any]:
-        url = f"{self.management_url}/v3/assets/{asset_id}"
-        return self.client.request_json("DELETE", url, headers=self._headers())
-
-    # ── 정책 ──────────────────────────────────────────────────────────────────
-
-    def create_policy(self, policy: EDCPolicy) -> Dict[str, Any]:
-        url = f"{self.management_url}/v3/policydefinitions"
-        result = self.client.request_json("POST", url, payload=policy.to_management_payload(), headers=self._headers())
-        LOGGER.info("정책 생성: %s", policy.policy_id)
-        return result
-
-    def list_policies(self, limit: int = 50) -> List[Dict[str, Any]]:
-        url = f"{self.management_url}/v3/policydefinitions/request"
-        result = self.client.request_json("POST", url, payload={"limit": limit}, headers=self._headers())
-        return result if isinstance(result, list) else result.get("items", [])
-
-    # ── 컨트랙트 정의 ─────────────────────────────────────────────────────────
-
-    def create_contract_definition(self, definition: ContractDefinition) -> Dict[str, Any]:
-        url = f"{self.management_url}/v3/contractdefinitions"
-        result = self.client.request_json("POST", url, payload=definition.to_management_payload(), headers=self._headers())
-        LOGGER.info("컨트랙트 정의 생성: %s", definition.contract_definition_id)
-        return result
-
-    # ── 카탈로그 조회 (소비자) ────────────────────────────────────────────────
-
-    def request_catalog(
+    def onboard(
         self,
-        counter_party_protocol_url: str,
-        asset_id: Optional[str] = None,
+        raw_dict:           Dict[str, Any],
+        provider_bpn:       str,
+        cobot_api_base_url: str = "http://localhost:8080",
+        cobot_data_path:    str = "/api/v1/cobot/telemetry",
+        policy_type:        str = "bpn",
     ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
-            "counterPartyAddress": counter_party_protocol_url,
-            "protocol": "dataspace-protocol-http",
-        }
-        if asset_id:
-            payload["querySpec"] = {
-                "filterExpression": [{
-                    "operandLeft": "https://w3id.org/edc/v0.0.1/ns/id",
-                    "operator": "=",
-                    "operandRight": asset_id,
-                }]
-            }
-        url = f"{self.management_url}/v3/catalog/request"
-        return self.client.request_json("POST", url, payload=payload, headers=self._headers())
+        """전체 파이프라인 실행: raw telemetry → AAS 저장 + EDC 등록.
 
-    # ── 컨트랙트 협상 (소비자) ────────────────────────────────────────────────
+        sample_telemetry.json 하나로 모든 단계를 실행합니다.
 
-    def negotiate_contract(
-        self,
-        counter_party_protocol_url: str,
-        asset_id: str,
-        offer_id: str,
-        provider_participant_id: str,
-        consumer_participant_id: str,
-        policy: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
-            "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
-            "@type": "ContractRequest",
-            "counterPartyAddress": counter_party_protocol_url,
-            "protocol": "dataspace-protocol-http",
-            "providerId": provider_participant_id,
-            "connectorId": consumer_participant_id,
-            "offer": {
-                "@id": offer_id,
-                "assetId": asset_id,
-                "providerId": provider_participant_id,
-            },
-        }
-        if policy:
-            payload["offer"]["policy"] = policy
-
-        url = f"{self.management_url}/v3/contractnegotiations"
-        result = self.client.request_json("POST", url, payload=payload, headers=self._headers())
-        negotiation_id = result.get("@id", result.get("id", ""))
-        LOGGER.info("컨트랙트 협상 시작: %s", negotiation_id)
-        return result
-
-    def get_negotiation(self, negotiation_id: str) -> Dict[str, Any]:
-        url = f"{self.management_url}/v3/contractnegotiations/{negotiation_id}"
-        return self.client.request_json("GET", url, headers=self._headers())
-
-    def await_agreement(
-        self,
-        negotiation_id: str,
-        poll_interval: float = 2.0,
-        max_wait: float = 120.0,
-    ) -> Tuple[str, str]:
-        """협상 완료를 폴링으로 대기합니다. (agreement_id, state) 반환."""
-        deadline = time.monotonic() + max_wait
-        while time.monotonic() < deadline:
-            neg = self.get_negotiation(negotiation_id)
-            state: str = neg.get("state", neg.get("edc:state", ""))
-            if state == "FINALIZED":
-                agreement_id: str = neg.get("contractAgreementId", neg.get("edc:contractAgreementId", ""))
-                LOGGER.info("협상 완료: agreement_id=%s", agreement_id)
-                return agreement_id, state
-            if state in {"TERMINATED", "ERROR"}:
-                raise RuntimeError(f"컨트랙트 협상 실패: state={state}")
-            LOGGER.debug("협상 대기 중: state=%s", state)
-            time.sleep(poll_interval)
-        raise TimeoutError(f"협상 타임아웃 ({max_wait}s): negotiation_id={negotiation_id}")
-
-    # ── 데이터 전송 시작 (소비자) ─────────────────────────────────────────────
-
-    def initiate_transfer(
-        self,
-        agreement_id: str,
-        asset_id: str,
-        counter_party_protocol_url: str,
-        data_destination_url: str,
-        provider_participant_id: str,
-    ) -> Dict[str, Any]:
-        """데이터 전송 프로세스를 시작합니다 (HTTP Pull 방식)."""
-        payload = {
-            "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
-            "@type": "TransferRequest",
-            "assetId": asset_id,
-            "contractId": agreement_id,
-            "connectorId": provider_participant_id,
-            "counterPartyAddress": counter_party_protocol_url,
-            "protocol": "dataspace-protocol-http",
-            "transferType": "HttpData-PULL",
-            "dataDestination": {
-                "type": "HttpData",
-                "baseUrl": data_destination_url,
-            },
-        }
-        url = f"{self.management_url}/v3/transferprocesses"
-        result = self.client.request_json("POST", url, payload=payload, headers=self._headers())
-        LOGGER.info("데이터 전송 시작: agreement_id=%s", agreement_id)
-        return result
-
-    def get_transfer(self, transfer_id: str) -> Dict[str, Any]:
-        url = f"{self.management_url}/v3/transferprocesses/{transfer_id}"
-        return self.client.request_json("GET", url, headers=self._headers())
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 파이프라인 (고수준 오케스트레이터)
-# ──────────────────────────────────────────────────────────────────────────────
-
-class CobotEDCPipeline:
-    """EDC 에셋 온보딩 + AAS 동기화 + 협상·전송 워크플로 오케스트레이터.
-
-    사용 예
-    ────────
-    pipeline = build_pipeline_from_env()
-
-    # 공급자: 에셋 온보딩
-    pipeline.onboard_cobot_asset("cobot-01-telemetry", "BPNL000000000001",
-                                 "http://localhost:8080")
-
-    # 공급자: AAS 동기화
-    pipeline.publish_telemetry_to_aas(telemetry_dict)
-
-    # 소비자: 데이터 수신 워크플로
-    pipeline.consume_asset("http://provider:8282/api/v1/ids/data",
-                           "cobot-01-telemetry", "BPNL000000000001", "BPNL000000000002")
-    """
-
-    def __init__(self, connector: EDCConnectorService, aas_bridge: AASBridge):
-        self.connector = connector
-        self.aas_bridge = aas_bridge
-
-    # ── 공급자: 에셋 온보딩 ───────────────────────────────────────────────────
-
-    def onboard_cobot_asset(
-        self,
-        asset_id: str,
-        provider_bpn: str,
-        cobot_api_base_url: str,
-        cobot_data_path: str = "/api/v1/cobot/telemetry",
-        policy_type: str = "bpn",
-    ) -> Dict[str, Dict[str, Any]]:
-        """EDC에 협동로봇 에셋, 정책, 컨트랙트를 일괄 등록합니다.
-
-        policy_type: "bpn"(기본) | "membership" | "open"
+        Returns:
+            파이프라인 실행 결과 요약 (JSON 직렬화 가능)
         """
+        result: Dict[str, Any] = {"pipeline": "onboard", "started_at": _utc_now()}
+
+        # Step 1: raw data mapping ─────────────────────────────────────────────
+        LOGGER.info("── Step 1: raw data mapping")
+        raw = self._parse_raw(raw_dict)
+        result["robot_id"] = raw.robot_id
+
+        # Step 2: 전처리 ──────────────────────────────────────────────────────
+        LOGGER.info("── Step 2: 전처리 (preprocess)")
+        normalized = self._preprocess(raw)
+        result["quality_flag"] = normalized.quality_flag.value
+        result["yield_rate"]   = normalized.yield_rate
+        result["issue_count"]  = len(normalized.issues)
+
+        # Step 3: AAS 매핑 ────────────────────────────────────────────────────
+        LOGGER.info("── Step 3: AAS 매핑")
+        shell, submodel = self._map_to_aas(normalized)
+        result["aas_shell_id"]    = shell.shell_id
+        result["aas_submodel_id"] = submodel.submodel_id
+
+        # Step 4: EDC 에셋/정책/컨트랙트 등록 ────────────────────────────────
+        LOGGER.info("── Step 4: EDC 에셋/정책/컨트랙트 등록")
+        asset_id = _make_asset_id(raw.robot_id)
+        result["edc"] = self._register_edc(
+            normalized   = normalized,
+            asset_id     = asset_id,
+            provider_bpn = provider_bpn,
+            base_url     = cobot_api_base_url,
+            data_path    = cobot_data_path,
+            policy_type  = policy_type,
+            submodel_id  = submodel.submodel_id,
+        )
+
+        # Step 5: AI 검증 (optional, 전처리·등록 완료 후) ─────────────────────
+        # AI는 결정권이 없는 advisory 역할 — 실패해도 파이프라인은 계속됩니다.
+        LOGGER.info("── Step 5: AI 검증 (optional)")
+        result["ai_validation"] = self._ai_validate(normalized)
+
+        # Step 6: AAS upsert (INSERT or UPDATE) ────────────────────────────────
+        LOGGER.info("── Step 6: AAS upsert")
+        result["aas"] = self._upsert_aas(shell, submodel)
+
+        result["completed_at"] = _utc_now()
+        result["success"]      = True
+        LOGGER.info("✔ 온보딩 완료: robot_id=%s asset_id=%s", raw.robot_id, asset_id)
+        return result
+
+    def sync_aas(self, raw_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """AAS만 재동기화 (EDC 등록 없음).
+
+        주기적인 텔레메트리 업데이트에 사용합니다.
+        onboard 이후 데이터를 갱신할 때 이 커맨드를 사용하세요.
+
+        흐름: Step1(raw mapping) → Step2(전처리) → Step3(AAS 매핑)
+              → Step5(AI 검증, optional) → Step6(AAS upsert)
+        """
+        LOGGER.info("── sync-aas 시작")
+        # Step 1
+        raw        = self._parse_raw(raw_dict)
+        # Step 2
+        normalized = self._preprocess(raw)
+        # Step 3
+        shell, submodel = self._map_to_aas(normalized)
+        # Step 5 (optional)
+        ai_result  = self._ai_validate(normalized)
+        # Step 6
+        aas_result = self._upsert_aas(shell, submodel)
+        LOGGER.info("✔ AAS 동기화 완료: robot_id=%s quality=%s",
+                    raw.robot_id, normalized.quality_flag.value)
+        return {
+            "pipeline":     "sync-aas",
+            "robot_id":     raw.robot_id,
+            "quality_flag": normalized.quality_flag.value,
+            "yield_rate":   normalized.yield_rate,
+            "issue_count":  len(normalized.issues),
+            "ai_validation": ai_result,
+            "aas":          aas_result,
+            "completed_at": _utc_now(),
+        }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Step 1: raw data mapping
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _parse_raw(self, raw_dict: Dict[str, Any]) -> RawTelemetry:
+        """딕셔너리 → RawTelemetry. 필수 필드 누락 시 InvalidTelemetryError."""
+        try:
+            return RawTelemetry.from_dict(raw_dict)
+        except KeyError as exc:
+            raise InvalidTelemetryError(f"필수 필드 누락: {exc}") from exc
+        except (TypeError, ValueError) as exc:
+            raise InvalidTelemetryError(f"필드 타입 오류: {exc}") from exc
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Step 2: 전처리
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _preprocess(self, raw: RawTelemetry) -> NormalizedTelemetry:
+        """임계값 검사, 품질 플래그 부여, 수율 계산."""
+        normalized = self._preprocessor.process(raw)
+        for issue in normalized.issues:
+            lvl = logging.WARNING if issue.severity == QualityFlag.WARNING else logging.ERROR
+            LOGGER.log(lvl, "  이슈 [%s] %s: %s", issue.severity.value, issue.field, issue.message)
+        return normalized
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Step 3: AAS 매핑
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _map_to_aas(self, normalized: NormalizedTelemetry) -> Tuple[AASShell, AASSubmodel]:
+        """NormalizedTelemetry → (AASShell, AASSubmodel)."""
+        return self._mapper.build_shell_and_submodel(normalized)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Step 4: EDC 에셋/정책/컨트랙트 등록
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _register_edc(
+        self,
+        normalized:   NormalizedTelemetry,
+        asset_id:     str,
+        provider_bpn: str,
+        base_url:     str,
+        data_path:    str,
+        policy_type:  str,
+        submodel_id:  str,
+    ) -> Dict[str, Any]:
+        """에셋 + 접근정책 + 계약정책 + 컨트랙트정의 + 카탈로그 등록.
+
+        정책 설계:
+            access_policy   = 에셋을 볼 수 있는 주체 정의
+            contract_policy = 계약 성립 조건 정의
+            → 두 정책이 모두 통과되어야 계약 성립
+
+        실제 EDC 연동 시:
+            self._edc_client가 주입되면 HTTP API를 호출합니다.
+            없으면 로컬 Mock 저장소(EDCStore)에 저장합니다.
+        """
+        # 에셋 생성
         asset = EDCAsset(
-            asset_id=asset_id,
-            name=f"Cobot 텔레메트리 {asset_id}",
-            base_url=cobot_api_base_url,
-            data_path=cobot_data_path,
-            description="공장 협동로봇 실시간 운용 데이터 스트림 (AAS Submodel 연동)",
-            provider_bpn=provider_bpn,
-            asset_type="factory-cobot-telemetry",
-            semantic_id=self.aas_bridge.COBOT_SEMANTIC_ID,
+            asset_id     = asset_id,
+            name         = f"Cobot 텔레메트리 — {normalized.robot_id}",
+            description  = (
+                f"협동로봇 {normalized.robot_id} 운용 데이터. "
+                f"라인: {normalized.line_id}, 스테이션: {normalized.station_id}"
+            ),
+            base_url     = base_url,
+            data_path    = data_path,
+            provider_bpn = provider_bpn,
+            extra        = {
+                "catenax:robotId":   normalized.robot_id,
+                "catenax:lineId":    normalized.line_id,
+                "catenax:stationId": normalized.station_id,
+                "aas:submodelId":    submodel_id,
+            },
         )
 
-        def _make_policy(suffix: str) -> EDCPolicy:
-            pid = f"{asset_id}-{suffix}-policy"
-            if policy_type == "membership":
-                return EDCPolicy.membership(pid, asset_id)
-            if policy_type == "open":
-                return EDCPolicy.open_access(pid, asset_id)
-            return EDCPolicy.bpn_restricted(pid, asset_id, provider_bpn)
+        # 정책 생성 (접근정책 + 계약정책)
+        access_policy   = _make_policy(f"{asset_id}-access",   asset_id, policy_type, provider_bpn)
+        contract_policy = _make_policy(f"{asset_id}-contract", asset_id, policy_type, provider_bpn)
 
-        access_policy   = _make_policy("access")
-        contract_policy = _make_policy("contract")
+        # 컨트랙트 정의 (에셋 + 두 정책 연결)
         contract = ContractDefinition(
-            contract_definition_id=f"{asset_id}-contract",
-            access_policy_id=access_policy.policy_id,
-            contract_policy_id=contract_policy.policy_id,
-            asset_id=asset_id,
+            contract_definition_id = f"{asset_id}-contractdef",
+            access_policy_id       = access_policy.policy_id,
+            contract_policy_id     = contract_policy.policy_id,
+            asset_id               = asset_id,
         )
 
-        LOGGER.info("온보딩 시작: asset_id=%s provider_bpn=%s policy=%s",
-                    asset_id, provider_bpn, policy_type)
+        # 저장 (Mock 또는 Real)
+        if self._edc_client:
+            asset_r    = self._edc_client.register_asset(asset)
+            access_r   = self._edc_client.register_policy(access_policy)
+            contract_r = self._edc_client.register_policy(contract_policy)
+            cdef_r     = self._edc_client.register_contract(contract)
+            mode       = "http_api"
+        else:
+            asset_r    = self._edc_store.register_asset(asset)
+            access_r   = self._edc_store.register_policy(access_policy)
+            contract_r = self._edc_store.register_policy(contract_policy)
+            cdef_r     = self._edc_store.register_contract(contract)
+            mode       = "local_mock"
+
+        # 카탈로그 갱신 (policy 정보 포함)
+        self._edc_store.upsert_catalog_entry(CatalogEntry(
+            asset_id           = asset_id,
+            asset_name         = asset.name,
+            provider_bpn       = provider_bpn,
+            contract_id        = contract.contract_definition_id,
+            semantic_id        = asset.semantic_id,
+            description        = asset.description,
+            robot_id           = normalized.robot_id,
+            policy_type        = policy_type,
+            access_policy_id   = access_policy.policy_id,
+            contract_policy_id = contract_policy.policy_id,
+        ))
+
         return {
-            "asset":               self.connector.register_asset(asset),
-            "access_policy":       self.connector.create_policy(access_policy),
-            "contract_policy":     self.connector.create_policy(contract_policy),
-            "contract_definition": self.connector.create_contract_definition(contract),
+            "asset_id":       asset_id,
+            "policy_type":    policy_type,
+            "asset":          asset_r,
+            "access_policy":  access_r,
+            "contract_policy": contract_r,
+            "contract_def":   cdef_r,
+            "mode":           mode,
         }
 
-    # ── 공급자: AAS 동기화 ────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # Step 5: AI 검증 (optional)
+    # ─────────────────────────────────────────────────────────────────────────
 
-    def publish_telemetry_to_aas(
-        self,
-        telemetry: "Mapping[str, Any] | FactoryCobotTelemetry",
-        ensure_shell: bool = True,
-    ) -> Dict[str, Any]:
-        """텔레메트리를 AAS Submodel로 변환해 서버에 업서트합니다."""
-        if not isinstance(telemetry, FactoryCobotTelemetry):
-            telemetry = FactoryCobotTelemetry.from_dict(telemetry)
-        if ensure_shell:
-            self.aas_bridge.ensure_shell(telemetry.robot_id)
-        return self.aas_bridge.upsert_telemetry(telemetry)
+    def _ai_validate(self, normalized: NormalizedTelemetry) -> Dict[str, Any]:
+        """Ollama AI로 텔레메트리 이상 징후를 분석합니다.
 
-    # ── 공급자: AAS Registry 등록 ─────────────────────────────────────────────
-
-    def register_to_registry(
-        self,
-        robot_id: str,
-        edc_data_plane_url: str,
-        asset_id: str,
-    ) -> Dict[str, Any]:
-        """AAS 레지스트리에 Shell Descriptor를 등록합니다."""
-        return self.aas_bridge.register_shell_descriptor(robot_id, edc_data_plane_url, asset_id)
-
-    # ── 소비자: 카탈로그 조회 ─────────────────────────────────────────────────
-
-    def query_provider_catalog(
-        self,
-        provider_protocol_url: str,
-        asset_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return self.connector.request_catalog(provider_protocol_url, asset_id)
-
-    # ── 소비자: 카탈로그 → 협상 → 전송 워크플로 ─────────────────────────────
-
-    def consume_asset(
-        self,
-        provider_protocol_url: str,
-        asset_id: str,
-        provider_bpn: str,
-        consumer_bpn: str,
-        data_destination_url: str = "http://localhost:9191/consumer/store",
-        poll_interval: float = 3.0,
-        negotiation_timeout: float = 120.0,
-    ) -> Dict[str, Any]:
-        """카탈로그 조회 → 협상 → 전송 시작 전체 워크플로.
-
-        Returns {"agreement_id": ..., "transfer_id": ..., "transfer": {...}}
+        Ollama를 사용할 수 없어도 예외를 외부로 전파하지 않습니다.
+        전체 시스템은 AI 없이 정상 동작합니다.
         """
-        # 1) 카탈로그에서 offer 탐색
-        LOGGER.info("카탈로그 조회: %s", provider_protocol_url)
-        catalog = self.connector.request_catalog(provider_protocol_url, asset_id)
-        datasets = catalog.get("dcat:dataset", catalog.get("dataset", []))
-        if not isinstance(datasets, list):
-            datasets = [datasets]
+        if not self._use_ai:
+            return {"ok": False, "reason": "AI 비활성화 (--use-ai 옵션 추가 후 재실행)"}
+        if not _AI_AVAILABLE:
+            return {"ok": False, "reason": "ai_helpers 모듈 없음"}
 
-        offer_id: Optional[str] = None
-        for ds in datasets:
-            if ds.get("@id") == asset_id or ds.get("id") == asset_id:
-                offers = ds.get("odrl:hasPolicy", ds.get("hasPolicy", []))
-                if not isinstance(offers, list):
-                    offers = [offers]
-                if offers:
-                    offer_id = offers[0].get("@id", offers[0].get("id"))
-                break
+        try:
+            if not check_ollama_available():
+                return {"ok": False, "reason": "Ollama 서버 미응답 — $ ollama serve 로 시작하세요"}
+            return validate_with_ai(normalized.to_dict())
+        except OllamaUnavailableError as exc:
+            LOGGER.warning("Ollama 사용 불가: %s", exc)
+            return {"ok": False, "reason": str(exc)}
 
-        if not offer_id:
-            raise RuntimeError(f"카탈로그에서 asset_id={asset_id} offer를 찾을 수 없습니다.")
+    # ─────────────────────────────────────────────────────────────────────────
+    # Step 6: AAS upsert
+    # ─────────────────────────────────────────────────────────────────────────
 
-        # 2) 컨트랙트 협상
-        LOGGER.info("컨트랙트 협상 시작: offer_id=%s", offer_id)
-        neg_result = self.connector.negotiate_contract(
-            counter_party_protocol_url=provider_protocol_url,
-            asset_id=asset_id,
-            offer_id=offer_id,
-            provider_participant_id=provider_bpn,
-            consumer_participant_id=consumer_bpn,
-        )
-        negotiation_id: str = neg_result.get("@id", neg_result.get("id", ""))
-        agreement_id, _ = self.connector.await_agreement(
-            negotiation_id, poll_interval, negotiation_timeout
-        )
+    def _upsert_aas(self, shell: AASShell, submodel: AASSubmodel) -> Dict[str, Any]:
+        """Shell + Submodel을 저장소에 upsert (INSERT or UPDATE).
 
-        # 3) 데이터 전송 시작
-        LOGGER.info("데이터 전송 시작: agreement_id=%s", agreement_id)
-        transfer = self.connector.initiate_transfer(
-            agreement_id=agreement_id,
-            asset_id=asset_id,
-            counter_party_protocol_url=provider_protocol_url,
-            data_destination_url=data_destination_url,
-            provider_participant_id=provider_bpn,
-        )
-        transfer_id: str = transfer.get("@id", transfer.get("id", ""))
+        기존 데이터 유무를 확인하여 자동으로 INSERT/UPDATE를 결정합니다.
+        실제 BaSyx 연동 시 aas_client를 주입합니다.
+        """
+        if self._aas_client:
+            shell_r    = self._aas_client.upsert_shell(shell)
+            submodel_r = self._aas_client.upsert_submodel(submodel)
+            mode       = "basyx_api"
+        else:
+            shell_r    = self._aas_store.upsert_shell(shell)
+            submodel_r = self._aas_store.upsert_submodel(submodel)
+            mode       = "local_mock"
 
-        return {
-            "agreement_id": agreement_id,
-            "transfer_id": transfer_id,
-            "transfer": transfer,
-        }
+        return {"shell": shell_r, "submodel": submodel_r, "mode": mode}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
 # 환경변수 기반 파이프라인 팩토리
-# ──────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
 
-def build_pipeline_from_env() -> CobotEDCPipeline:
-    """환경변수로 CobotEDCPipeline을 생성합니다.
+def build_pipeline_from_env(use_ai: bool = False) -> CobotEDCPipeline:
+    """환경변수 설정에 따라 Mock 또는 실제 HTTP 클라이언트를 주입합니다.
 
-    필수
-    ────
-    CATENAX_EDC_MANAGEMENT_URL   http://localhost:9191/management
-    CATENAX_AAS_BASE_URL         http://localhost:8081
-    CATENAX_AAS_SUBMODEL_ID      urn:uuid:cobot-operational-data-submodel
+    ── 필수 환경변수 (실제 EDC 연동 시) ───────────────────────────────────────
+    CATENAX_EDC_MANAGEMENT_URL   http://edc-provider:8080/management
 
-    선택
-    ────
-    CATENAX_EDC_API_KEY
-    CATENAX_AAS_API_KEY
-    CATENAX_AAS_REGISTRY_URL     http://localhost:8082  (레지스트리가 별도인 경우)
-    CATENAX_AAS_SHELL_ID         urn:uuid:cobot-01-shell
-    CATENAX_HTTP_TIMEOUT         초 단위 (기본 15)
-    CATENAX_MAX_RETRIES          기본 3
+    ── 선택 환경변수 ───────────────────────────────────────────────────────────
+    CATENAX_EDC_API_KEY          EDC Management API 키
+    CATENAX_AAS_BASE_URL         http://basyx:8081  (실제 BaSyx 연동 시)
+    CATENAX_AAS_API_KEY          BaSyx API 키
+    CATENAX_STORE_DIR            로컬 저장소 경로 (기본: ./store)
+    CATENAX_MOCK_DATA_DIR        위와 동일 (이전 이름 호환)
+    OLLAMA_BASE_URL              http://localhost:11434
+    OLLAMA_MODEL                 llama3
     """
-    management_url = os.environ["CATENAX_EDC_MANAGEMENT_URL"]
-    aas_base_url   = os.environ["CATENAX_AAS_BASE_URL"]
-    submodel_id    = os.environ["CATENAX_AAS_SUBMODEL_ID"]
-    edc_api_key    = os.environ.get("CATENAX_EDC_API_KEY")
-    aas_api_key    = os.environ.get("CATENAX_AAS_API_KEY")
-    registry_url   = os.environ.get("CATENAX_AAS_REGISTRY_URL", "")
-    shell_id       = os.environ.get("CATENAX_AAS_SHELL_ID")
-    timeout        = float(os.environ.get("CATENAX_HTTP_TIMEOUT", "15"))
-    max_retries    = int(os.environ.get("CATENAX_MAX_RETRIES", "3"))
+    edc_mgmt_url = os.environ.get("CATENAX_EDC_MANAGEMENT_URL")
+    edc_api_key  = os.environ.get("CATENAX_EDC_API_KEY")
+    aas_base_url = os.environ.get("CATENAX_AAS_BASE_URL")
+    aas_api_key  = os.environ.get("CATENAX_AAS_API_KEY")
 
-    http_client = HttpJsonClient(timeout=timeout, max_retries=max_retries)
-    connector   = EDCConnectorService(management_url=management_url, client=http_client, api_key=edc_api_key)
-    aas_bridge  = AASBridge(
-        aas_base_url=aas_base_url,
-        submodel_id=submodel_id,
-        client=http_client,
-        auth_key=aas_api_key,
-        registry_url=registry_url,
-        shell_id=shell_id,
-    )
-    return CobotEDCPipeline(connector=connector, aas_bridge=aas_bridge)
+    edc_client: Optional[EDCHttpClient]  = None
+    aas_client: Optional[BaSyxAASClient] = None
 
+    if edc_mgmt_url:
+        edc_client = EDCHttpClient(management_url=edc_mgmt_url, api_key=edc_api_key)
+        LOGGER.info("실제 EDC 연동 활성화: %s", edc_mgmt_url)
+    else:
+        LOGGER.info("EDC Mock 모드 (CATENAX_EDC_MANAGEMENT_URL 미설정 → 로컬 저장소 사용)")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 유틸리티
-# ──────────────────────────────────────────────────────────────────────────────
+    if aas_base_url:
+        aas_client = BaSyxAASClient(aas_base_url=aas_base_url, auth_key=aas_api_key)
+        LOGGER.info("실제 BaSyx AAS 연동 활성화: %s", aas_base_url)
+    else:
+        LOGGER.info("AAS Mock 모드 (CATENAX_AAS_BASE_URL 미설정 → 로컬 저장소 사용)")
 
-def _load_json(path: str) -> Dict[str, Any]:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return CobotEDCPipeline(edc_client=edc_client, aas_client=aas_client, use_ai=use_ai)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI
-# ──────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# CLI 커맨드 핸들러
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _cmd_onboard(args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
+    records = _load_telemetry_records(Path(args.telemetry_json))
+    if not getattr(args, "all_records", False):
+        records = records[:1]
+    results: List[Dict[str, Any]] = []
+    for raw in records:
+        results.append(
+            pipeline.onboard(
+                raw_dict           = raw,
+                provider_bpn       = args.provider_bpn,
+                cobot_api_base_url = args.cobot_api_base_url,
+                cobot_data_path    = args.cobot_data_path,
+                policy_type        = args.policy_type,
+            )
+        )
+    if len(results) == 1:
+        print(json.dumps(results[0], indent=2, ensure_ascii=False))
+    else:
+        print(
+            json.dumps(
+                {"pipeline": "onboard-batch", "count": len(results), "results": results},
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+
+def _cmd_sync_aas(args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
+    records = _load_telemetry_records(Path(args.telemetry_json))
+    if not getattr(args, "all_records", False):
+        records = records[:1]
+    results: List[Dict[str, Any]] = [pipeline.sync_aas(raw) for raw in records]
+    if len(results) == 1:
+        print(json.dumps(results[0], indent=2, ensure_ascii=False))
+    else:
+        print(
+            json.dumps(
+                {"pipeline": "sync-aas-batch", "count": len(results), "results": results},
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+
+
+def _cmd_export_catalog(_args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
+    catalog = pipeline._edc_store.list_catalog()
+    if not catalog:
+        print('카탈로그가 비어 있습니다. 먼저 "onboard" 커맨드를 실행하세요.')
+        return
+    print(json.dumps({
+        "catalog_count": len(catalog),
+        "entries":       catalog,
+        "exported_at":   _utc_now(),
+    }, indent=2, ensure_ascii=False))
+
+
+def _cmd_list(_args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
+    assets    = pipeline._edc_store.list_assets()
+    shells    = pipeline._aas_store.list_shells()
+    submodels = pipeline._aas_store.list_submodels()
+    print(json.dumps({
+        "edc_assets": [
+            {"asset_id": a["asset_id"], "name": a["name"], "registered_at": a["registered_at"]}
+            for a in assets
+        ],
+        "aas_shells": [
+            {"id": s["id"], "idShort": s["idShort"],
+             "updated_at": s.get("_meta", {}).get("updated_at")}
+            for s in shells
+        ],
+        "aas_submodels": [
+            {"id": s["id"], "idShort": s["idShort"],
+             "updated_at": s.get("_meta", {}).get("updated_at")}
+            for s in submodels
+        ],
+        "summary": {
+            "asset_count":    len(assets),
+            "shell_count":    len(shells),
+            "submodel_count": len(submodels),
+        },
+    }, indent=2, ensure_ascii=False))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CLI 진입점
+# ═════════════════════════════════════════════════════════════════════════════
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     """CLI 진입점.
 
-    커맨드
-    ──────
-    onboard   : EDC에 협동로봇 에셋·정책·컨트랙트 등록
-    sync-aas  : 텔레메트리 JSON → AAS Submodel 동기화
-    catalog   : 공급자 카탈로그 조회
-    consume   : 카탈로그 → 협상 → 전송 워크플로
-    register  : AAS Registry에 Shell Descriptor 등록
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │ 커맨드          설명                                                │
+    ├────────────────┬────────────────────────────────────────────────────┤
+    │ onboard        │ 전체 파이프라인: raw→전처리→AAS→EDC 등록          │
+    │ sync-aas       │ AAS만 재동기화 (EDC 등록 생략)                    │
+    │ export-catalog │ 로컬 카탈로그 JSON 출력                           │
+    │ list           │ 등록된 에셋·AAS 목록 출력                         │
+    └────────────────┴────────────────────────────────────────────────────┘
 
-    환경변수 설정 예시
-    ──────────────────
-    export CATENAX_EDC_MANAGEMENT_URL=http://localhost:9191/management
-    export CATENAX_AAS_BASE_URL=http://localhost:8081
-    export CATENAX_AAS_SUBMODEL_ID=urn:uuid:cobot-operational-data-submodel
-    export CATENAX_EDC_API_KEY=your-edc-api-key
-    export CATENAX_AAS_API_KEY=your-aas-api-key
+    빠른 시작 (sample_telemetry.json 기준):
+
+        # 1. 전체 온보딩
+        python3 edc.py onboard \\
+            --telemetry-json sample_telemetry.json \\
+            --provider-bpn BPNL000000000001
+
+        # 2. AI 포함 온보딩
+        python3 edc.py onboard \\
+            --telemetry-json sample_telemetry.json \\
+            --provider-bpn BPNL000000000001 --use-ai
+
+        # 3. AAS만 업데이트
+        python3 edc.py sync-aas --telemetry-json sample_telemetry.json
+
+        # 4. 카탈로그 확인
+        python3 edc.py export-catalog
+
+        # 5. 등록 목록 확인
+        python3 edc.py list
     """
     parser = argparse.ArgumentParser(
-        description="Catena-X EDC 커넥터 – 협동로봇 AAS 연동",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        prog        = "edc.py",
+        description = "Catena-X 협동로봇 데이터 플랫폼 CLI",
+        formatter_class = argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--log-level", default="INFO",
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # onboard
-    p_on = sub.add_parser("onboard", help="EDC에 협동로봇 에셋 등록")
-    p_on.add_argument("--asset-id", required=True)
-    p_on.add_argument("--provider-bpn", required=True)
-    p_on.add_argument("--cobot-api-base-url", required=True)
-    p_on.add_argument("--cobot-data-path", default="/api/v1/cobot/telemetry")
-    p_on.add_argument("--policy-type", choices=["bpn", "membership", "open"],
-                      default="bpn", help="정책 유형 (기본: bpn)")
+    # ── onboard ───────────────────────────────────────────────────────────────
+    p_on = sub.add_parser("onboard", help="전체 파이프라인 실행 (raw → AAS + EDC)")
+    p_on.add_argument("--telemetry-json",     required=True)
+    p_on.add_argument("--provider-bpn",       required=True)
+    p_on.add_argument("--cobot-api-base-url", default="http://localhost:8080")
+    p_on.add_argument("--cobot-data-path",    default="/api/v1/cobot/telemetry")
+    p_on.add_argument("--policy-type",
+                      choices=["bpn", "membership", "open"], default="bpn")
+    p_on.add_argument("--use-ai", action="store_true",
+                      help="Ollama AI 검증 활성화")
+    p_on.add_argument(
+        "--all-records",
+        action="store_true",
+        help="JSON이 배열일 때 모든 레코드에 대해 온보딩 (기본: 첫 레코드만)",
+    )
 
-    # sync-aas
-    p_sync = sub.add_parser("sync-aas", help="텔레메트리 JSON → AAS 동기화")
+    # ── sync-aas ──────────────────────────────────────────────────────────────
+    p_sync = sub.add_parser("sync-aas", help="AAS만 재동기화")
     p_sync.add_argument("--telemetry-json", required=True)
-    p_sync.add_argument("--no-shell", action="store_true",
-                        help="AAS Shell 자동 생성을 건너뜁니다")
+    p_sync.add_argument("--use-ai", action="store_true")
+    p_sync.add_argument(
+        "--all-records",
+        action="store_true",
+        help="JSON이 배열일 때 모든 레코드에 대해 동기화 (기본: 첫 레코드만)",
+    )
 
-    # catalog
-    p_cat = sub.add_parser("catalog", help="공급자 카탈로그 조회")
-    p_cat.add_argument("--provider-protocol-url", required=True)
-    p_cat.add_argument("--asset-id")
+    # ── export-catalog ────────────────────────────────────────────────────────
+    sub.add_parser("export-catalog", help="로컬 카탈로그 출력")
 
-    # consume
-    p_con = sub.add_parser("consume", help="협상 + 데이터 전송 워크플로")
-    p_con.add_argument("--provider-protocol-url", required=True)
-    p_con.add_argument("--asset-id", required=True)
-    p_con.add_argument("--provider-bpn", required=True)
-    p_con.add_argument("--consumer-bpn", required=True)
-    p_con.add_argument("--data-destination-url",
-                       default="http://localhost:9191/consumer/store")
+    # ── list ──────────────────────────────────────────────────────────────────
+    sub.add_parser("list", help="등록된 에셋·AAS 목록 출력")
 
-    # register
-    p_reg = sub.add_parser("register", help="AAS Registry에 Shell Descriptor 등록")
-    p_reg.add_argument("--robot-id", required=True)
-    p_reg.add_argument("--edc-data-plane-url", required=True)
-    p_reg.add_argument("--asset-id", required=True)
-
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    args     = parser.parse_args(list(argv) if argv is not None else None)
+    use_ai   = getattr(args, "use_ai", False)
 
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        level  = getattr(logging, args.log_level),
+        format = "%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
-    pipeline = build_pipeline_from_env()
-    result: Any = {}
 
-    if args.command == "onboard":
-        result = pipeline.onboard_cobot_asset(
-            asset_id=args.asset_id,
-            provider_bpn=args.provider_bpn,
-            cobot_api_base_url=args.cobot_api_base_url,
-            cobot_data_path=args.cobot_data_path,
-            policy_type=args.policy_type,
-        )
+    pipeline = build_pipeline_from_env(use_ai=use_ai)
 
-    elif args.command == "sync-aas":
-        raw = _load_json(args.telemetry_json)
-        result = pipeline.publish_telemetry_to_aas(raw, ensure_shell=not args.no_shell)
+    try:
+        if args.command == "onboard":
+            _cmd_onboard(args, pipeline)
+        elif args.command == "sync-aas":
+            _cmd_sync_aas(args, pipeline)
+        elif args.command == "export-catalog":
+            _cmd_export_catalog(args, pipeline)
+        elif args.command == "list":
+            _cmd_list(args, pipeline)
 
-    elif args.command == "catalog":
-        result = pipeline.query_provider_catalog(
-            provider_protocol_url=args.provider_protocol_url,
-            asset_id=getattr(args, "asset_id", None),
-        )
+    except InvalidTelemetryError as exc:
+        LOGGER.error("텔레메트리 오류: %s", exc)
+        return 1
+    except FileNotFoundError as exc:
+        LOGGER.error("파일 없음: %s", exc)
+        return 1
+    except (EDCStoreError, AASStoreError) as exc:
+        LOGGER.error("저장소 오류: %s", exc)
+        return 1
+    except KeyboardInterrupt:
+        return 0
 
-    elif args.command == "consume":
-        result = pipeline.consume_asset(
-            provider_protocol_url=args.provider_protocol_url,
-            asset_id=args.asset_id,
-            provider_bpn=args.provider_bpn,
-            consumer_bpn=args.consumer_bpn,
-            data_destination_url=args.data_destination_url,
-        )
-
-    elif args.command == "register":
-        result = pipeline.register_to_registry(
-            robot_id=args.robot_id,
-            edc_data_plane_url=args.edc_data_plane_url,
-            asset_id=args.asset_id,
-        )
-
-    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
