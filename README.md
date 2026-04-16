@@ -1,19 +1,11 @@
-# eunbi — Catena-X cobot PoC
+# eunbi
 
-## Catena-X 파이프라인 (권장)
+이 저장소는 여러 실험을 담는 워크스페이스입니다.
 
-모듈화된 구현은 `**apps/catenax/**` 를 보세요.  
-자세한 CLI·대시보드·환경변수는 `[apps/catenax/README.md](apps/catenax/README.md)` 참고.
+| 경로 | 설명 |
+|------|------|
+| **[`catena-x/`](catena-x/README.md)** | **Catena-X 협동로봇 PoC** — EDC/AAS mock, CLI, 대시보드 (여기만 보면 됨) |
+| [`labs/`](labs/) | Catena-X와 무관한 메모·가이드 (OpenClaw, RAG 등) |
+| `catena_X_project/` | 별도 Git 클론(`.gitignore`로 상위 커밋 제외) |
 
-**한 줄 요약**
-
-```bash
-export CATENAX_STORE_DIR="$PWD/store"
-python3 apps/catenax/edc.py onboard \
-  --telemetry-json apps/catenax/sample_telemetry.json \
-  --provider-bpn BPNL000000000001 --all-records
-python3 server/catena_app.py --port 8080
-# → http://127.0.0.1:8080/dashboard.html
-```
-
-로컬 mock 데이터는 기본적으로 `store/` 아래에 생깁니다 (`.gitignore`에 `store/` 권장).
+**Catena-X 작업은 항상 `catena-x/` 디렉터리에서 진행하세요.**

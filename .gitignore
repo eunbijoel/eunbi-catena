@@ -12,6 +12,8 @@ catena_X_project/
 
 # Catena-X mock store (edc.py onboard 결과)
 /store/
+/catena-x/store/
 
 # 로컬 mock 실행 산출물 (onboard 로 재생성 가능)
 /data/
+/catena-x/data/

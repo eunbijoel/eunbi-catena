@@ -6,14 +6,14 @@ KPI·플릿·알람을 표시하고, **Run Pipeline** 으로 샘플 텔레메트
 
 실행::
 
-    cd /path/to/eunbi
+    cd /path/to/eunbi/catena-x
     export CATENAX_MODE=mock
     python3 server/dashboard.py
 
 브라우저: http://127.0.0.1:8765/
 
 환경변수: DASHBOARD_HOST (기본 0.0.0.0), DASHBOARD_PORT (기본 8765),
-          CATENAX_MOCK_DATA_DIR (기본 <repo>/data/catena_mock)
+          CATENAX_MOCK_DATA_DIR (기본 ``<catena-x>/data/catena_mock``)
 """
 
 from __future__ import annotations

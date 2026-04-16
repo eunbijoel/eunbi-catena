@@ -17,9 +17,10 @@ GitHub `catena_X_project` 와 동일한 **모듈 구조**(`models`, `aas_mapper`
 
 ## 빠른 시작 (mock)
 
-저장소 루트에서:
+**`catena-x/`** 디렉터리에서:
 
 ```bash
+cd catena-x
 export CATENAX_STORE_DIR="$PWD/store"   # 또는 CATENAX_MOCK_DATA_DIR (호환)
 
 python3 apps/catenax/edc.py onboard \
@@ -31,17 +32,18 @@ python3 apps/catenax/edc.py list
 python3 apps/catenax/edc.py export-catalog
 ```
 
-- `**--all-records` 없음**: JSON 배열이면 **첫 레코드만** 처리.
-- `**--all-records`**: 배열의 **모든 로봇**에 대해 온보딩.
+- **`--all-records` 없음**: JSON 배열이면 **첫 레코드만** 처리.
+- **`--all-records`**: 배열의 **모든 로봇**에 대해 온보딩.
 
 ## 대시보드 (GitHub 스타일)
 
 `dashboard.html` + `server/catena_app.py` — **같은 `CATENAX_STORE_DIR`** 를 읽습니다.
 
 ```bash
+cd catena-x
 export CATENAX_STORE_DIR="$PWD/store"
-python3 server/catena_app.py --port 8080
-# 브라우저: http://127.0.0.1:8080/dashboard.html
+python3 server/catena_app.py --port 8765
+# 브라우저: http://127.0.0.1:8765/dashboard.html
 ```
 
 ## 기타 서버
