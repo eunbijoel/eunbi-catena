@@ -17,3 +17,6 @@ catena_X_project/
 # 로컬 mock 실행 산출물 (onboard 로 재생성 가능)
 /data/
 /catena-x/data/
+
+# 텔레메트리 서버(server/app.py) 수신 JSON
+/catena-x/server/data/

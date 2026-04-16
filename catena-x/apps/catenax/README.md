@@ -12,7 +12,8 @@ GitHub `catena_X_project` 와 동일한 **모듈 구조**(`models`, `aas_mapper`
 | `aas_mapper.py`         | 전처리 + AAS Shell/Submodel 매핑                 |
 | `ai_helpers.py`         | Ollama 보조 (선택)                              |
 | `edc_monolith.py`       | 이전 단일 파일 PoC (참고용 보관)                       |
-| `sample_telemetry.json` | 단일 객체 또는 **객체 배열** (여러 로봇)                  |
+| `sample_telemetry.json` | 기본 예제 — **단일 로봇** (문서 표준 형식) |
+| `sample_telemetry_fleet.json` | **배열** — 플릿 데모 (`onboard --all-records`) |
 
 
 ## 빠른 시작 (mock)

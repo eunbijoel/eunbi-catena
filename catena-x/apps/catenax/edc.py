@@ -149,6 +149,7 @@ def run_onboard_from_records(
     cobot_api_base_url: str = "http://localhost:8080",
     cobot_data_path: str = "/api/v1/cobot/telemetry",
     policy_type: str = "bpn",
+    edc_asset_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """레코드마다 ``onboard`` 실행 — 예전 ``ingest_*`` 대체."""
     results: List[Dict[str, Any]] = []
@@ -160,6 +161,7 @@ def run_onboard_from_records(
                 cobot_api_base_url=cobot_api_base_url,
                 cobot_data_path=cobot_data_path,
                 policy_type=policy_type,
+                edc_asset_id=edc_asset_id,
             )
         )
     if len(results) == 1:
@@ -522,6 +524,7 @@ class CobotEDCPipeline:
         cobot_api_base_url: str = "http://localhost:8080",
         cobot_data_path:    str = "/api/v1/cobot/telemetry",
         policy_type:        str = "bpn",
+        edc_asset_id:       Optional[str] = None,
     ) -> Dict[str, Any]:
         """전체 파이프라인 실행: raw telemetry → AAS 저장 + EDC 등록.
 
@@ -552,7 +555,10 @@ class CobotEDCPipeline:
 
         # Step 4: EDC 에셋/정책/컨트랙트 등록 ────────────────────────────────
         LOGGER.info("── Step 4: EDC 에셋/정책/컨트랙트 등록")
-        asset_id = _make_asset_id(raw.robot_id)
+        if edc_asset_id and str(edc_asset_id).strip():
+            asset_id = str(edc_asset_id).strip()
+        else:
+            asset_id = _make_asset_id(raw.robot_id)
         result["edc"] = self._register_edc(
             normalized   = normalized,
             asset_id     = asset_id,
@@ -841,6 +847,7 @@ def _cmd_onboard(args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
                 cobot_api_base_url = args.cobot_api_base_url,
                 cobot_data_path    = args.cobot_data_path,
                 policy_type        = args.policy_type,
+                edc_asset_id       = getattr(args, "asset_id", None),
             )
         )
     if len(results) == 1:
@@ -964,6 +971,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     p_on.add_argument("--provider-bpn",       required=True)
     p_on.add_argument("--cobot-api-base-url", default="http://localhost:8080")
     p_on.add_argument("--cobot-data-path",    default="/api/v1/cobot/telemetry")
+    p_on.add_argument(
+        "--asset-id",
+        default=None,
+        help="EDC 에셋 ID (미지정 시 urn:catenax:cobot:<robot_id>:telemetry 규칙)",
+    )
     p_on.add_argument("--policy-type",
                       choices=["bpn", "membership", "open"], default="bpn")
     p_on.add_argument("--use-ai", action="store_true",
