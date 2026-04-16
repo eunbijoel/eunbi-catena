@@ -1,11 +1,8 @@
-# eunbi
-
-이 저장소는 여러 실험을 담는 워크스페이스입니다.
+# eunbi_catena
 
 | 경로 | 설명 |
 |------|------|
 | **[catena-x/](catena-x/README.md)** | **Catena-X 협동로봇 PoC** — EDC/AAS mock, CLI, 대시보드 |
-| [labs/](labs/) | Catena-X와 무관한 메모·가이드 (OpenClaw, RAG 등) |
 | `catena_X_project/` | 별도 Git 클론 (상위 `.gitignore`로 커밋 제외) |
 
 ### 대시보드 — 저장소 **루트**에서 (예전 경로 대체)
@@ -20,7 +17,7 @@ chmod +x run_dashboard.sh   # 최초 1회
 
 브라우저: **http://127.0.0.1:8765/dashboard.html**
 
-같은 일을 직접 하려면:
+Recreate:
 
 ```bash
 export CATENAX_STORE_DIR="$PWD/catena-x/store"
