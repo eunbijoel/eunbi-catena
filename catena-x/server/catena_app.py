@@ -37,8 +37,9 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections import Counter
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 _SERVER_DIR  = Path(__file__).resolve().parent
@@ -188,6 +189,13 @@ def _flatten(sm: Dict[str, Any]) -> Dict[str, Any]:
     total  = good + reject
     yr     = prod.get("YieldRate", round(good / total, 4) if total else 0.0)
 
+    alarms_raw = qual.get("Alarms", "none")
+    alarms_list: List[str] = []
+    if isinstance(alarms_raw, list):
+        alarms_list = [str(x) for x in alarms_raw]
+    elif isinstance(alarms_raw, str) and alarms_raw.strip() and alarms_raw.strip() != "none":
+        alarms_list = [s.strip() for s in alarms_raw.split(",") if s.strip()]
+
     return {
         "robot_id":       op.get("RobotId", ""),
         "line_id":        op.get("LineId", ""),
@@ -206,7 +214,8 @@ def _flatten(sm: Dict[str, Any]) -> Dict[str, Any]:
         "joint_positions": kin.get("JointPositionsDeg", {}),
         "quality_flag":   qual.get("QualityFlag", "UNKNOWN"),
         "alarm_count":    int(qual.get("AlarmCount", 0) or 0),
-        "alarms":         qual.get("Alarms", "none"),
+        "alarms":         alarms_raw if isinstance(alarms_raw, str) else ", ".join(alarms_list),
+        "alarms_list":    alarms_list,
         "issues":         [v for k, v in qual.items() if k.startswith("Issue_")],
         "preprocessed_at": qual.get("PreprocessedAt", ""),
         "submodel_id":    sm.get("id", ""),
@@ -218,6 +227,19 @@ def _flatten(sm: Dict[str, Any]) -> Dict[str, Any]:
 # Dashboard API 응답 빌더
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _joint_chart_series(robots: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
+    """대시보드 조인트 차트: 기본 ``cobot-01`` 이 있으면 사용, 없으면 첫 로봇."""
+    prefer_id = "cobot-01"
+    pick = next((r for r in robots if r.get("robot_id") == prefer_id), None)
+    if pick is None and robots:
+        pick = robots[0]
+    if not pick:
+        return [], ""
+    joints = pick.get("joint_positions") or {}
+    rows = [{"joint": k, "deg": float(v)} for k, v in sorted(joints.items())]
+    return rows, str(pick.get("robot_id", ""))
+
+
 def _build_dashboard() -> Dict[str, Any]:
     robots  = [_flatten(sm) for sm in _all_submodels()]
     catalog = list(_edc("catalog.json").values())
@@ -227,6 +249,8 @@ def _build_dashboard() -> Dict[str, Any]:
     good_total = reject_total = 0
     temps: List[float] = []
     powers: List[float] = []
+    line_counts: Counter[str] = Counter()
+    robots_with_alarms = 0
 
     for r in robots:
         s = r["status"]
@@ -239,9 +263,20 @@ def _build_dashboard() -> Dict[str, Any]:
             temps.append(r["temperature_c"])
         if r.get("power_watts"):
             powers.append(r["power_watts"])
+        lid = str(r.get("line_id") or "").strip()
+        if lid:
+            line_counts[lid] += 1
+        al = r.get("alarms_list")
+        if isinstance(al, list) and len(al) > 0:
+            robots_with_alarms += 1
+        elif isinstance(r.get("alarms"), str) and r["alarms"] not in ("", "none", "None"):
+            robots_with_alarms += 1
 
     total_p    = good_total + reject_total
     fleet_yield = round(good_total / total_p * 100, 2) if total_p else 0.0
+
+    joint_rows, joint_robot_id = _joint_chart_series(robots)
+    line_labels = sorted(line_counts.keys())
 
     return {
         "generated_at": _utc_now(),
@@ -255,6 +290,8 @@ def _build_dashboard() -> Dict[str, Any]:
             "total_good_parts":   good_total,
             "total_reject_parts": reject_total,
             "catalog_count":      len(catalog),
+            "line_count":         len(line_counts),
+            "robots_with_alarms": robots_with_alarms,
         },
         "robots":  robots,
         "catalog": catalog,
@@ -276,10 +313,14 @@ def _build_dashboard() -> Dict[str, Any]:
                 for r in robots
             ],
             "status_pie": [{"status": k, "count": v} for k, v in status_counts.items()],
-            "joint_positions": (
-                [{"joint": k, "deg": v} for k, v in robots[0].get("joint_positions", {}).items()]
-                if robots else []
-            ),
+            "joint_positions": joint_rows,
+            "joint_chart_robot_id": joint_robot_id,
+            "robots_by_line": [{"line_id": k, "robot_count": line_counts[k]} for k in line_labels],
+            "vibration_by_robot": [
+                {"robot_id": r["robot_id"], "vib": r.get("vibration_mm_s")}
+                for r in robots
+                if r.get("vibration_mm_s") is not None
+            ],
         },
     }
 

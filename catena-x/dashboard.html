@@ -180,6 +180,10 @@
                      animation: flash-red 1.5s ease-in-out infinite; }
   .status-STOP     { background: rgba(90,116,153,.15); color: var(--muted);  border: 1px solid var(--border); }
   .status-UNKNOWN  { background: rgba(90,116,153,.15); color: var(--muted);  border: 1px solid var(--border); }
+  .status-FAULT    { background: rgba(255,59,92,.15);  color: var(--red);    border: 1px solid rgba(255,59,92,.35);
+                     animation: flash-red 1.5s ease-in-out infinite; }
+  .status-WARNING  { background: rgba(245,197,66,.12); color: var(--yellow); border: 1px solid rgba(245,197,66,.35); }
+  .status-MAINTENANCE { background: rgba(251,146,60,.12); color: #fb923c; border: 1px solid rgba(251,146,60,.35); }
   @keyframes flash-red { 0%,100%{box-shadow:none} 50%{box-shadow:0 0 12px rgba(255,59,92,.5)} }
 
   .flag-badge {
@@ -396,6 +400,16 @@
       <div class="kpi-value"><span id="kpi-assets">—</span></div>
       <div class="kpi-sub">in local catalog</div>
     </div>
+    <div class="kpi-card" style="animation-delay:.35s">
+      <div class="kpi-label">Production Lines</div>
+      <div class="kpi-value"><span id="kpi-lines">—</span></div>
+      <div class="kpi-sub">distinct line_id</div>
+    </div>
+    <div class="kpi-card" style="animation-delay:.4s">
+      <div class="kpi-label">Robots w/ Alarms</div>
+      <div class="kpi-value"><span id="kpi-alarm-robots">—</span></div>
+      <div class="kpi-sub">fleet reporting alarms</div>
+    </div>
   </div>
 
   <!-- Robot cards -->
@@ -431,8 +445,16 @@
       <div class="chart-title">Fleet Status Distribution</div>
       <div class="chart-wrap"><canvas id="chart-status"></canvas></div>
     </div>
+    <div class="chart-card" style="animation-delay:.32s">
+      <div class="chart-title">Robots by Production Line</div>
+      <div class="chart-wrap"><canvas id="chart-line"></canvas></div>
+    </div>
+    <div class="chart-card" style="animation-delay:.34s">
+      <div class="chart-title">Vibration (mm/s)</div>
+      <div class="chart-wrap"><canvas id="chart-vibe"></canvas></div>
+    </div>
     <div class="chart-card" style="animation-delay:.35s">
-      <div class="chart-title">Joint Positions — cobot-01 (°)</div>
+      <div class="chart-title" id="chart-joints-title">Joint Positions — cobot-01 (°)</div>
       <div class="chart-wrap"><canvas id="chart-joints"></canvas></div>
     </div>
   </div>
@@ -470,7 +492,14 @@ const charts = {};
 
 // ── Color helpers ──────────────────────────────────────────────────────────
 const STATUS_COLORS = {
-  RUNNING: '#00e5a0', IDLE: '#f5c542', ERROR: '#ff3b5c', STOP: '#5a7499', UNKNOWN: '#334155'
+  RUNNING: '#00e5a0',
+  IDLE: '#f5c542',
+  ERROR: '#ff3b5c',
+  FAULT: '#ff3b5c',
+  WARNING: '#f5c542',
+  STOP: '#5a7499',
+  UNKNOWN: '#334155',
+  MAINTENANCE: '#fb923c',
 };
 const FLAG_COLORS = {
   OK: '#00e5a0', WARNING: '#f5c542', CRITICAL: '#ff3b5c', UNKNOWN: '#5a7499'
@@ -490,7 +519,7 @@ async function loadData() {
     document.getElementById('last-update').textContent =
       'Updated ' + new Date().toLocaleTimeString();
   } catch (err) {
-    showError(`Cannot reach API: ${err.message} — Is the server running? (python3 server/app.py)`);
+    showError(`Cannot reach API: ${err.message} — Is the server running? (python3 server/catena_app.py)`);
   } finally {
     document.getElementById('loading').style.display = 'none';
   }
@@ -508,6 +537,8 @@ function renderAll(data) {
   setText('kpi-good',    (summary.total_good_parts ?? 0).toLocaleString());
   setText('kpi-reject-sub', `${(summary.total_reject_parts ?? 0).toLocaleString()} rejected`);
   setText('kpi-assets',  summary.catalog_count ?? 0);
+  setText('kpi-lines',   summary.line_count ?? '—');
+  setText('kpi-alarm-robots', summary.robots_with_alarms ?? '—');
 
   renderRobotCards(robots);
   renderCharts(chart_data);
@@ -641,6 +672,21 @@ function renderCharts(cd) {
   makeBarChart('chart-cycle',
     labels, cd.cycle_time_by_robot.map(d => d.cycle_ms), colors, 'ms');
 
+  // Robots per line
+  const byLine = cd.robots_by_line || [];
+  makeBarChart('chart-line',
+    byLine.map(d => d.line_id),
+    byLine.map(d => d.robot_count),
+    byLine.map((_, i) => robotColor(i)),
+    'robots');
+
+  // Vibration
+  const vibe = cd.vibration_by_robot || [];
+  const vibeLabs = vibe.map(d => d.robot_id);
+  const vibeVals = vibe.map(d => d.vib);
+  const vibeCols = vibeVals.map(v => v > 2.5 ? 'rgba(255,59,92,.65)' : v > 1.5 ? 'rgba(245,197,66,.65)' : 'rgba(0,229,160,.55)');
+  makeBarChart('chart-vibe', vibeLabs, vibeVals, vibeCols, 'mm/s');
+
   // Status doughnut
   {
     const ctx = document.getElementById('chart-status').getContext('2d');
@@ -662,12 +708,17 @@ function renderCharts(cd) {
     });
   }
 
+  const jrId = cd.joint_chart_robot_id || 'cobot-01';
+  const jt = document.getElementById('chart-joints-title');
+  if (jt) jt.textContent = `Joint Positions — ${jrId} (°)`;
+
   // Joints radar/bar
   {
     const ctx = document.getElementById('chart-joints').getContext('2d');
     if (charts['chart-joints']) charts['chart-joints'].destroy();
-    const jLabels = cd.joint_positions.map(d => d.joint);
-    const jVals   = cd.joint_positions.map(d => d.deg);
+    const jp = cd.joint_positions || [];
+    const jLabels = jp.map(d => d.joint);
+    const jVals   = jp.map(d => d.deg);
     charts['chart-joints'] = new Chart(ctx, {
       type: 'bar',
       data: {

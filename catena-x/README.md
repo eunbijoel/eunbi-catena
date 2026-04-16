@@ -1,161 +1,251 @@
 # Catena-X 협동로봇 텔레메트리 PoC
 
-공장 협동로봇 JSON 텔레메트리를 **전처리 → AAS Shell/Submodel → EDC 자산·정책·계약(mock)** 흐름으로 다루는 샘플 코드입니다.  
-실제 커넥터 없이 **로컬 JSON 저장소**로 동작합니다.
+## Catena-X가 뭐야?
+
+**Catena-X**는 자동차 등 산업 **데이터를 안전하게 연결·공유**하기 위한 **유럽 주도 데이터 스페이스** 생태계입니다. 여기서는 그중에서도 두 가지만 기억하면 됩니다.
+
+| 용어 | 한 줄 |
+|------|--------|
+| **EDC (Eclipse Dataspace Components)** | “누가 어떤 데이터에 **어떤 조건으로 접근**할 수 있는지”를 **계약·정책**으로 관리하는 쪽 |
+| **AAS (Asset Administration Shell)** | 설비·로봇 같은 자산을 **디지털 트윈 JSON**으로 표현하는 **표준화된 모델** |
+
+이 저장소의 코드는 **실제 클라우드 Catena-X에 붙는 완제품**이 아니라, **로컬 JSON만으로** 위 개념을 **따라 해 보는 PoC**입니다.
 
 ---
 
-## 디렉터리 구조
+## 이 프로젝트가 하는 일
 
+공장·앱이 보내는 **협동로봇 텔레메트리(JSON)** 를 받아서:
 
-| 경로                                   | 용도                                                                             |
-| ------------------------------------ | ------------------------------------------------------------------------------ |
-| `**apps/catenax/`**                  | 파이프라인 핵심 코드                                                                    |
-| `apps/catenax/edc.py`                | CLI 진입점 (`onboard`, `sync-aas`, `list`, `export-catalog`) 및 `CobotEDCPipeline` |
-| `apps/catenax/models.py`             | `RawTelemetry`, EDC/AAS 데이터 클래스                                                |
-| `apps/catenax/aas_mapper.py`         | 전처리(`TelemetryPreprocessor`) + AAS 매핑(`AASMapper`)                             |
-| `apps/catenax/ai_helpers.py`         | Ollama 보조(선택, `--use-ai`)                                                      |
-| `apps/catenax/edc_monolith.py`       | 이전 단일 파일 버전(참고용)                                                               |
-| `apps/catenax/sample_telemetry.json` | **기본 샘플** — 단일 로봇 JSON (EDC HttpData·문서 예제와 동일 형식) |
-| `apps/catenax/sample_telemetry_fleet.json` | **플릿 데모** — 객체 배열 (여러 대, `--all-records`용) |
-| **`server/`** | HTTP 서버 |
-| `server/app.py` | **텔레메트리 수신 백엔드** — `POST/GET` 저장 `server/data/`, EDC 온보딩 시 `cobot-api-base-url` 로 연결 |
-| `server/catena_app.py` | **대시보드 UI** — `dashboard.html`, `/api/dashboard` (mock `store/` 읽기) |
-| `server/dashboard.py` | 경량 KPI 대시보드, `Run Pipeline` |
-| `**dashboard.html`**                 | `catena_app.py`가 서빙하는 프론트(차트·카드 UI)                                            |
-| `**store/`**                         | (생성됨, git 제외) mock 결과 — `store/aas/`, `store/edc/`                             |
-| `**data/`**                          | (생성됨, git 제외) `dashboard.py`용 mock 경로 등 로컬 실험 데이터                              |
+1. 규칙으로 **전처리·품질 플래그**를 붙이고  
+2. **AAS Shell / Submodel** 파일로 바꿔 저장하고  
+3. **EDC 자산·정책·카탈로그(mock)** 를 로컬에 쌓은 뒤  
+4. **웹 대시보드**로 플릿 상태를 볼 수 있게 합니다.
 
+**AI(Ollama)** 는 **선택 사항**이며, 판단을 바꾸지 않고 **참고용 설명**만 붙입니다.
 
 ---
 
-## 서버 흐름 (센터장님 워크플로와 동일)
+## 폴더 구조 (필요한 것만)
 
-1. **텔레메트리 서버** (`server/app.py`) — 공장/PLC/앱이 `POST` 로 JSON 전송 → `server/data/YYYY-MM-DD/*.json` + `server/data/latest.json`.
-2. **EDC 온보딩** (`edc.py onboard`) — HttpData 자산이 위 API (`/api/v1/cobot/telemetry`)를 가리키도록 mock(또는 실제 Management URL) 등록.
-3. **AAS 동기화** (`edc.py sync-aas`) — 파일/저장 텔레메트리 → AAS 서브모델 upsert (mock 시 `store/aas/`).
+```
+catena-x/
+├── apps/catenax/
+│   ├── edc.py                 # CLI: onboard, sync-aas, list, export-catalog
+│   ├── aas_mapper.py          # 전처리 + AAS 매핑
+│   ├── models.py              # Raw / Normalized 데이터 타입
+│   ├── ai_helpers.py          # Ollama 호출 (선택)
+│   └── sample_telemetry.json  # 샘플 입력 (단일 객체 또는 로봇 배열)
+├── server/
+│   ├── app.py                 # 텔레메트리 HTTP 수신 → 디스크 저장
+│   └── catena_app.py          # 대시보드 + /api/dashboard (store 읽기)
+├── dashboard.html             # UI (catena_app.py가 서빙)
+└── store/                     # 생성됨, git 제외 — mock 결과 전부 여기
+    ├── aas/                   # Shell / Submodel JSON
+    └── edc/                   # 자산, 정책, 카탈로그 등
+```
+
+---
+
+## 전체 흐름 (한눈에)
+
+```mermaid
+flowchart LR
+  subgraph 입력
+    A[샘플/실제 JSON]
+    B[HTTP POST 텔레메트리]
+  end
+  subgraph 저장소
+    S[(store/)]
+  end
+  A -->|edc.py onboard| S
+  B -->|server/app.py| D[(server/data/)]
+  D -.->|옵션: cobot-api-base-url| E[EDC가 가리키는 소스 API]
+  S -->|catena_app.py| F[대시보드 / API]
+```
+
+- **대시보드**는 `sample_telemetry.json`을 직접 읽지 않습니다. **`edc.py onboard`로 만든 `store/aas/`** 를 읽습니다.  
+- **실시간 수집**은 `server/app.py`가 담당하고, **의미·카탈로그·AAS 반영**은 `edc.py`가 담당합니다.
+
+---
+
+## ① 실시간 텔레메트리 수집 (선택)
+
+공장/PLC/앱이 REST로 넣을 때의 경로입니다.
+
+```mermaid
+flowchart TD
+  A["Cobot / PLC / Factory App"] -->|POST telemetry JSON| B["server/app.py<br/>TelemetryHandler"]
+  B --> C["validate_telemetry()"]
+  C -->|invalid| D["400 Bad Request"]
+  C -->|valid| E["store_telemetry()"]
+  E --> F["data/YYYY-MM-DD/*.json"]
+  E --> G["data/latest.json"]
+  E --> H["201 Created"]
+
+  I["Client"] -->|GET latest / GET list| B
+  B --> J["read_latest() / read_recent()"]
+  J --> K["JSON 응답"]
+```
+
+| 구분 | 입력 | 출력 |
+|------|------|------|
+| `server/app.py` | `POST /api/v1/cobot/telemetry` 본문(JSON) | 날짜별 파일 + `latest.json`, HTTP 상태 |
+| 같은 서버 | `GET …/latest`, `GET …?limit=N` | 저장된 JSON |
+
+기본 데이터 디렉터리: **`server/data/`** (환경 변수로 변경 가능).
+
+---
+
+## ② 온보딩 파이프라인 (핵심)
+
+파일에서 읽거나, 나중에 HttpData 자산이 가리킬 **같은 형태의 JSON**으로 **AAS + mock EDC**를 채웁니다.
+
+```mermaid
+flowchart TD
+  P["sample_telemetry.json<br/>또는 배열"] --> Q["edc.py onboard"]
+  Q --> S1["① Raw → 파싱"]
+  S1 --> S2["② 전처리 · 임계값 · 이슈"]
+  S2 --> S3["③ AAS Shell/Submodel 생성"]
+  S3 --> S4["④ EDC 자산·정책·계약 mock 등록"]
+  S4 --> S5["⑤ AI 검증 optional"]
+  S5 --> S6["⑥ AAS 파일 upsert"]
+  S6 --> OUT["store/aas/ · store/edc/"]
+
+  R["edc.py sync-aas"] --> S1
+  R --> S2
+  R --> S3
+  R --> S5
+  R --> S6
+```
+
+| 단계 | 입력 | 출력(요지) |
+|------|------|------------|
+| ① | JSON 한 건 | `RawTelemetry` |
+| ② | Raw | 정규화 + `quality_flag`, 이슈 목록 |
+| ③ | Normalized | 메모리 상 Shell / Submodel |
+| ④ | Normalized + BPN 등 | `store/edc/` 에 자산·정책·카탈로그 |
+| ⑤ | Normalized | Ollama 요약(실패해도 파이프라인은 성공) |
+| ⑥ | Shell / Submodel | `store/aas/*_shell.json`, `*_submodel.json` |
+
+**`sync-aas`**: ④를 건너뛰고 **AAS만** 갱신할 때 사용 (주기적 업데이트용).
+
+---
+
+## ③ 대시보드
+
+```mermaid
+flowchart LR
+  U[브라우저] -->|GET /dashboard.html| CA["server/catena_app.py"]
+  CA -->|GET /api/dashboard| API["_build_dashboard()"]
+  API --> SM["store/aas/*_submodel.json"]
+  API --> ED["store/edc/catalog.json"]
+  API --> JSON["요약 + 차트용 데이터"]
+  JSON --> U
+```
+
+| 구분 | 입력 | 출력 |
+|------|------|------|
+| `catena_app.py` | `CATENAX_STORE_DIR` 아래 mock 파일 | HTML, `/api/dashboard`, `/api/robots/...` |
+
+---
+
+## AI는 어디에 쓰이나?
+
+| 항목 | 내용 |
+|------|------|
+| **위치** | `edc.py` 파이프라인 **5단계**, `ai_helpers.py` |
+| **켜는 법** | `onboard` / `sync-aas` 에 **`--use-ai`** (Ollama가 떠 있어야 함) |
+| **역할** | 전처리된 텔레메트리를 **자연어로 이상 징후 참고**만 함. **등록·저장 결정은 항상 규칙 기반** |
+| **꺼져 있을 때** | 그냥 건너뜀. 전체 동작에는 문제 없음 |
+| **환경 변수** | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT` 등 |
+
+---
+
+## 최종 산출물 (무엇이 생기나)
+
+| 산출물 | 설명 |
+|--------|------|
+| `store/aas/*_shell.json` | 로봇(자산) 단위 Shell |
+| `store/aas/*_submodel.json` | 텔레메트리·품질·키네마틱 등 **대시보드가 읽는 본체** |
+| `store/edc/` | mock 자산 ID, 정책, **카탈로그**(대시보드 테이블) |
+| `server/data/` | **`app.py`로 POST한 경우만** — 일별 JSON, `latest.json` |
+
+---
+
+## JSON 수정 후 반영 (대시보드 기준)
+
+1. `apps/catenax/sample_telemetry.json` 편집·저장 (단일 로봇 객체 또는 **로봇 배열**).  
+2. **같은** `CATENAX_STORE_DIR`로 다시 온보딩:
 
 ```bash
 cd catena-x
-python3 server/app.py --host 0.0.0.0 --port 8080
+export CATENAX_STORE_DIR="$PWD/store"
+python3 apps/catenax/edc.py onboard \
+  --telemetry-json apps/catenax/sample_telemetry.json \
+  --provider-bpn BPNL000000000001 \
+  --all-records
 ```
 
-| 엔드포인트 | 설명 |
-|------------|------|
-| `GET /health` | 헬스 |
-| `POST /api/v1/cobot/telemetry` | 수신 (필수 필드 검증, 실패 시 400) |
-| `GET /api/v1/cobot/telemetry/latest` | `latest.json` 또는 `?robot_id=` |
-| `GET /api/v1/cobot/telemetry?limit=20` | 최근 N건 |
+3. 대시보드 **새로고침** (`catena_app.py` 실행 중이어야 함).
 
-예시:
-
-```bash
-curl -s -X POST http://127.0.0.1:8080/api/v1/cobot/telemetry \
-  -H "Content-Type: application/json" \
-  -d @apps/catenax/sample_telemetry.json
-```
+플릿만 보려면 기본이 첫 레코드만이므로 **`--all-records` 필수**입니다.
 
 ---
 
-## 빠른 시작 (mock EDC/AAS)
+## 빠른 실행 예시
 
-작업 디렉터리: **`catena-x`**
+**Mock 온보딩 + 대시보드**
 
 ```bash
 cd catena-x
 export CATENAX_STORE_DIR="$PWD/store"
 mkdir -p store
 
-# 단일 로봇 샘플로 온보딩 (기본)
 python3 apps/catenax/edc.py onboard \
   --telemetry-json apps/catenax/sample_telemetry.json \
-  --provider-bpn BPNL000000000001
-
-# 플릿(배열) 전체 온보딩
-python3 apps/catenax/edc.py onboard \
-  --telemetry-json apps/catenax/sample_telemetry_fleet.json \
   --provider-bpn BPNL000000000001 \
   --all-records
 
-# BerePi 스타일: EDC 에셋 ID 고정
-python3 apps/catenax/edc.py onboard \
-  --telemetry-json apps/catenax/sample_telemetry.json \
-  --provider-bpn BPNL000000000001 \
-  --asset-id cobot-01-telemetry \
-  --cobot-api-base-url http://127.0.0.1:8080
-
-python3 apps/catenax/edc.py list
-python3 apps/catenax/edc.py export-catalog
-```
-
-### 대시보드 (GitHub 스타일 UI)
-
-```bash
-cd catena-x
-export CATENAX_STORE_DIR="$PWD/store"
 python3 server/catena_app.py --port 8765
+# 브라우저: http://127.0.0.1:8765/dashboard.html
 ```
 
-브라우저: **http://127.0.0.1:8765/dashboard.html** (포트 충돌 시 `--port` 변경).  
-`server/app.py`(8080)와 동시에 띄울 수 있습니다(서로 다른 포트).
-
-### 경량 대시보드 (`dashboard.py`)
+**텔레메트리 수집 서버(별 포트)** — 실제 POST 테스트용:
 
 ```bash
-cd catena-x
-export CATENAX_MOCK_DATA_DIR="$PWD/data/catena_mock"
-python3 server/dashboard.py
+python3 server/app.py --host 0.0.0.0 --port 8080
 ```
 
-기본 **8765** — `GET /api/summary`, `POST /api/pipeline/run` 등.
-
----
-
-## 환경 변수 (요약)
-
-
-| 변수                           | 설명                                               |
-| ---------------------------- | ------------------------------------------------ |
-| `CATENAX_STORE_DIR`          | mock 저장 루트 (`store/aas`, `store/edc`). **권장.**   |
-| `CATENAX_MOCK_DATA_DIR`      | 예전 이름; `CATENAX_STORE_DIR`와 동일 역할로 `edc.py`에서 호환 |
-| `CATENAX_EDC_MANAGEMENT_URL` | 설정 시 실제 EDC Management API 사용                    |
-| `CATENAX_AAS_BASE_URL`       | 설정 시 실제 BaSyx AAS 사용                             |
-| `OLLAMA_*` | `--use-ai` 시 Ollama |
-
-
----
-
-## JSON 수정 후 반영
-
-1. `apps/catenax/sample_telemetry.json` 편집·저장
-2. 다시 온보딩:
-  `python3 apps/catenax/edc.py onboard ... --all-records`
-3. 대시보드 새로고침 (같은 `CATENAX_STORE_DIR` 사용)
+온보딩 시 HttpData가 이 API를 가리키게 하려면 `edc.py onboard`에  
+`--cobot-api-base-url http://127.0.0.1:8080` 를 추가합니다.
 
 ---
 
 ## CLI 요약
 
+| 명령 | 설명 |
+|------|------|
+| `onboard --telemetry-json … --provider-bpn …` | 전체 파이프라인 (①~⑥) |
+| `onboard … --all-records` | JSON이 **배열**일 때 **모든 로봇** 처리 (기본은 **첫 레코드만**) |
+| `sync-aas --telemetry-json …` | **AAS만** 갱신 (EDC 재등록 없음) |
+| `list` | 등록된 mock 자산·AAS 요약 |
+| `export-catalog` | 로컬 카탈로그 JSON 덤프 |
 
-| 명령                                            | 설명                             |
-| --------------------------------------------- | ------------------------------ |
-| `onboard --telemetry-json … --provider-bpn …` | 전체 파이프라인                       |
-| `onboard … --all-records`                     | 배열의 **모든** 레코드 처리 (기본은 첫 레코드만) |
-| `sync-aas --telemetry-json …`                 | AAS만 갱신                        |
-| `list`                                        | 등록된 에셋·AAS 요약                  |
-| `export-catalog`                              | 로컬 카탈로그 JSON                   |
+---
 
+## 환경 변수 (자주 쓰는 것만)
+
+| 변수 | 역할 |
+|------|------|
+| `CATENAX_STORE_DIR` | mock 루트 (`store/`). **대시보드와 onboard가 반드시 같아야 함** |
+| `CATENAX_EDC_MANAGEMENT_URL` | 설정 시 **실제** EDC Management API (미설정이면 로컬 mock) |
+| `CATENAX_AAS_BASE_URL` | 설정 시 **실제** AAS 서버 (미설정이면 로컬 파일) |
 
 ---
 
 ## 표준·참고
 
-- Eclipse EDC (Tractus-X) Management API  
+- [Eclipse Dataspace Components (EDC)](https://eclipse-edc.github.io/) — Tractus-X 등에서 사용  
 - AAS / IDTA 협동로봇 서브모델 개념  
-- Catena-X 데이터 스페이스 PoC 수준 (실제 계약 협상·전송은 비목표)
-
----
-
-## 상위 저장소
-
-이 폴더는 저장소 루트 `eunbi` 아래에 있으며, Catena-X와 무관한 파일은 `../labs/` 등에 둡니다.
+- 본 repo는 **PoC**: 실제 계약 협상·원격 커넥터 운영은 범위 밖
