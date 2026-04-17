@@ -1,4 +1,4 @@
-# Catena-X 협동로봇 텔레메트리 PoC
+# Catena-X SW 구현 예
 
 [대시보드](http://127.0.0.1:8765/dashboard.html)
 
@@ -10,11 +10,11 @@
 | **EDC (Eclipse Dataspace Components)** | “누가 어떤 데이터에 **어떤 조건으로 접근**할 수 있는지”를 **계약·정책**으로 관리하는 쪽 |
 | **AAS (Asset Administration Shell)** | 설비·로봇 같은 자산을 **디지털 트윈 JSON**으로 표현하는 **표준화된 모델** |
 
-이 저장소의 코드는 **실제 클라우드 Catena-X에 붙는 완제품**이 아니라, **로컬 JSON만으로** 위 개념을 **따라 해 보는 PoC**입니다.
+이 코드파일은 **로컬 JSON만으로** 위의 개념을 *적용 해 보는 구현 단계**입니다.
 
 ---
 
-## 이 프로젝트가 하는 일
+## 프로젝트 개요
 
 공장·앱이 보내는 **협동로봇 텔레메트리(JSON)** 를 받아서:
 
@@ -27,7 +27,7 @@
 
 ---
 
-## 폴더 구조 (필요한 것만)
+## 폴더 구조
 
 ```
 catena-x/
@@ -35,7 +35,7 @@ catena-x/
 │   ├── edc.py                 # CLI: onboard, sync-aas, list, export-catalog
 │   ├── aas_mapper.py          # 전처리 + AAS 매핑
 │   ├── models.py              # Raw / Normalized 데이터 타입
-│   ├── ai_helpers.py          # Ollama 호출 (선택)
+│   ├── ai_helpers.py          # Ollama 호출
 │   └── sample_telemetry.json  # 샘플 입력 (단일 객체 또는 로봇 배열)
 ├── server/
 │   ├── app.py                 # 텔레메트리 HTTP 수신 → 디스크 저장
@@ -98,7 +98,7 @@ flowchart TD
 
 ---
 
-## ② 온보딩 파이프라인 (핵심)
+## ② 온보딩 파이프라인 (중요**)
 
 파일에서 읽거나, 나중에 HttpData 자산이 가리킬 **같은 형태의 JSON**으로 **AAS + mock EDC**를 채웁니다.
 
@@ -109,7 +109,7 @@ flowchart TD
   S1 --> S2["② 전처리 · 임계값 · 이슈"]
   S2 --> S3["③ AAS Shell/Submodel 생성"]
   S3 --> S4["④ EDC 자산·정책·계약 mock 등록"]
-  S4 --> S5["⑤ AI 검증 optional"]
+  S4 --> S5["⑤ AI 검증"]
   S5 --> S6["⑥ AAS 파일 upsert"]
   S6 --> OUT["store/aas/ · store/edc/"]
 
@@ -151,19 +151,19 @@ flowchart LR
 
 ---
 
-## AI는 어디에 쓰이나?
+## AI 활용:
 
 | 항목 | 내용 |
 |------|------|
 | **위치** | `edc.py` 파이프라인 **5단계**, `ai_helpers.py` |
 | **켜는 법** | `onboard` / `sync-aas` 에 **`--use-ai`** (Ollama가 떠 있어야 함) |
-| **역할** | 전처리된 텔레메트리를 **자연어로 이상 징후 참고**만 함. **등록·저장 결정은 항상 규칙 기반** |
+| **역할** | 전처리된 텔레메트리를 **자연어로 이상 징후 참고**. **등록·저장 결정은 항상 규칙 기반** |
 | **꺼져 있을 때** | 그냥 건너뜀. 전체 동작에는 문제 없음 |
 | **환경 변수** | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT` 등 |
 
 ---
 
-## 최종 산출물 (무엇이 생기나)
+## 최종 산출물 
 
 | 산출물 | 설명 |
 |--------|------|
@@ -174,7 +174,7 @@ flowchart LR
 
 ---
 
-## JSON 수정 후 반영 (대시보드 기준)
+## JSON 수정 후 (0416 대시보드 기준)
 
 1. `apps/catenax/sample_telemetry.json` 편집·저장 (단일 로봇 객체 또는 **로봇 배열**).  
 2. **같은** `CATENAX_STORE_DIR`로 다시 온보딩:
@@ -190,7 +190,7 @@ python3 apps/catenax/edc.py onboard \
 
 3. 대시보드 **새로고침** (`catena_app.py` 실행 중이어야 함).
 
-플릿만 보려면 기본이 첫 레코드만이므로 **`--all-records` 필수**입니다.
+플릿만 보려면 기본이 첫 레코드만이므로 **`--all-records` 필수**.
 
 ---
 
@@ -235,7 +235,7 @@ python3 server/app.py --host 0.0.0.0 --port 8080
 
 ---
 
-## 환경 변수 (자주 쓰는 것만)
+## 자주 사용하는 환경 변수
 
 | 변수 | 역할 |
 |------|------|
@@ -245,8 +245,8 @@ python3 server/app.py --host 0.0.0.0 --port 8080
 
 ---
 
-## 표준·참고
+## 참고
 
 - [Eclipse Dataspace Components (EDC)](https://eclipse-edc.github.io/) — Tractus-X 등에서 사용  
-- AAS / IDTA 협동로봇 서브모델 개념  
-- 본 repo는 **PoC**: 실제 계약 협상·원격 커넥터 운영은 범위 밖
+- [AAS / IDTA 협동로봇 서브모델 개념 ](https://github.com/jeonghoonkang/BerePi/tree/master/apps/catenax)
+- Cursor AI for code generation/ Chat GPT for telemetry generation
