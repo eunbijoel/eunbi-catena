@@ -248,5 +248,5 @@ python3 server/app.py --host 0.0.0.0 --port 8080
 ## 참고
 
 - [Eclipse Dataspace Components (EDC)](https://eclipse-edc.github.io/) — Tractus-X 등에서 사용  
-- [AAS / IDTA 협동로봇 서브모델 개념 ](https://github.com/jeonghoonkang/BerePi/tree/master/apps/catenax)
+- [Catena X 구현 예제](https://github.com/jeonghoonkang/BerePi/tree/master/apps/catenax)
 - Cursor AI for code generation/ Chat GPT for telemetry generation
