@@ -1,6 +1,6 @@
 # Catena-X SW 구현 예
 
-[대시보드](http://127.0.0.1:8765/dashboard.html)
+[대시보드](http://127.0.0.1:8765/dashboard.html) (대시보드를 실행한 PC의 IP로 http://<IP>:8765/dashboard.html) 
 
 ## Catena-X 정의
 
