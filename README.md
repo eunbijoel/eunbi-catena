@@ -1,11 +1,6 @@
-# eunbi_catena
-
-
 | 경로                                  | 설명                                              |
 | ----------------------------------- | ----------------------------------------------- |
 | **[catena-x/](catena-x/README.md)** | **Catena-X 협동로봇 PoC** — EDC/AAS mock, CLI, 대시보드 |
-| [labs/](labs/)                      | Catena-X와 무관한 메모·가이드 (OpenClaw, RAG 등)          |
-| `catena_X_project/`                 | 별도 Git 클론 (상위 `.gitignore`로 커밋 제외)              |
 
 ### 대시보드 — 저장소 **루트**에서 (예전 경로 대체)
 
