@@ -243,6 +243,13 @@ python3 server/app.py --host 0.0.0.0 --port 8080
 | `CATENAX_EDC_MANAGEMENT_URL` | 설정 시 **실제** EDC Management API (미설정이면 로컬 mock) |
 | `CATENAX_AAS_BASE_URL` | 설정 시 **실제** AAS 서버 (미설정이면 로컬 파일) |
 
+
+### EDC mock은 “API”를 염두에 둔 구현
+- **위치:** `apps/catenax/edc.py`  
+  - **`EDCStore`**: 자산·정책·계약정의·카탈로그를 **`store/edc/*.json`에 쓰는 mock**. 메서드 이름이 실제 연동과 같음 (`register_asset`, `register_policy`, `register_contract`, `upsert_catalog_entry`). 클래스 주석에 **실제 EDC Management API v3** 대응(`POST /v3/assets` 등)이 적혀 있음.  
+  - **`EDCHttpClient`**: 위와 **같은 메서드**로 **`POST /v3/assets`**, **`/v3/policydefinitions`**, **`/v3/contractdefinitions`** HTTP 호출(환경 변수로 켤 때).  
+- **파이프라인:** `CobotEDCPipeline._register_edc()`에서 에셋 → 정책(접근·계약) → 계약 정의 → 카탈로그 순으로 처리; 클라이언트가 있으면 HTTP, 없으면 `EDCStore`로 분기.  
+- **지금은 대부분 “함수 호출 = JSON 파일 저장”**이고, **추후 API 호출로 바꾸기 쉽게** 작성 상태
 ---
 
 ## 참고
