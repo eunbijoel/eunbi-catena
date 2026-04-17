@@ -12,7 +12,7 @@ Goal
     ✔ raw telemetry → 전처리 → AAS Submodel 저장/갱신
     ✔ EDC 에셋/정책/컨트랙트를 로컬 저장소에 등록
     ✔ 로컬 카탈로그 조회 (export-catalog)
-    ✔ Ollama AI 보조 검증 (선택적, --use-ai)
+    ✔ Ollama AI 보조 검증 (기본 시도, Ollama 없으면 스킵 / --no-ai 로 끔)
     ✔ sample_telemetry.json으로 즉시 테스트 가능
     ✔ Mock ↔ 실제 EDC/BaSyx 전환 경계 명확화
 
@@ -31,7 +31,7 @@ Non-Goal
   RawTelemetry
          │
          ▼  [Step 2] 전처리 (임계값 검사, 품질 플래그, 수율 계산)
-  NormalizedTelemetry ──[Step 5]──→ Ollama AI 검증 (optional)
+  NormalizedTelemetry ──[Step 5]──→ Ollama AI 검증 (가능하면 자동, 실패 시 스킵)
          │
          ▼  [Step 3] AAS 매핑 (IDTA-02017 SubmodelElementCollection 구조)
   AASShell + AASSubmodel
@@ -104,6 +104,12 @@ except ImportError:
     _AI_AVAILABLE = False
 
 LOGGER = logging.getLogger("catenax.edc")
+
+
+def _ai_disabled_by_env() -> bool:
+    """``CATENAX_DISABLE_AI=1`` (또는 true/yes) 이면 Ollama 단계를 건너뜀."""
+    v = os.environ.get("CATENAX_DISABLE_AI", "").strip().lower()
+    return v in ("1", "true", "yes")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -488,7 +494,7 @@ class CobotEDCPipeline:
     Step 2  _preprocess()       → NormalizedTelemetry
     Step 3  _map_to_aas()       → AASShell + AASSubmodel
     Step 4  _register_edc()     → EDCAsset/Policy/Contract 등록
-    Step 5  _ai_validate()      → Ollama 검증 (optional)
+    Step 5  _ai_validate()      → Ollama 검증 (가능하면 자동)
     Step 6  _upsert_aas()       → AAS INSERT or UPDATE
     ─────────────────────────────────────────────────────
 
@@ -503,7 +509,7 @@ class CobotEDCPipeline:
         edc_client: Optional[EDCHttpClient]  = None,  # None = Mock
         aas_client: Optional[BaSyxAASClient] = None,  # None = Mock
         thresholds: Optional[TelemetryThresholds] = None,
-        use_ai:     bool = False,
+        ai_disabled: Optional[bool] = None,
     ):
         self._aas_store    = aas_store  or AASStore()
         self._edc_store    = edc_store  or EDCStore()
@@ -511,7 +517,11 @@ class CobotEDCPipeline:
         self._aas_client   = aas_client
         self._preprocessor = TelemetryPreprocessor(thresholds)
         self._mapper       = AASMapper()
-        self._use_ai       = use_ai and _AI_AVAILABLE
+        # None → 환경 변수 CATENAX_DISABLE_AI / True·False → 명시적 오버라이드
+        if ai_disabled is None:
+            self._ai_disabled = _ai_disabled_by_env()
+        else:
+            self._ai_disabled = bool(ai_disabled)
 
     # ─────────────────────────────────────────────────────────────────────────
     # 공개 API
@@ -569,9 +579,9 @@ class CobotEDCPipeline:
             submodel_id  = submodel.submodel_id,
         )
 
-        # Step 5: AI 검증 (optional, 전처리·등록 완료 후) ─────────────────────
+        # Step 5: AI 검증 (전처리·등록 완료 후, Ollama 가능 시 자동) ───────────
         # AI는 결정권이 없는 advisory 역할 — 실패해도 파이프라인은 계속됩니다.
-        LOGGER.info("── Step 5: AI 검증 (optional)")
+        LOGGER.info("── Step 5: AI 검증 (Ollama)")
         result["ai_validation"] = self._ai_validate(normalized)
 
         # Step 6: AAS upsert (INSERT or UPDATE) ────────────────────────────────
@@ -590,7 +600,7 @@ class CobotEDCPipeline:
         onboard 이후 데이터를 갱신할 때 이 커맨드를 사용하세요.
 
         흐름: Step1(raw mapping) → Step2(전처리) → Step3(AAS 매핑)
-              → Step5(AI 검증, optional) → Step6(AAS upsert)
+              → Step5(AI 검증, Ollama) → Step6(AAS upsert)
         """
         LOGGER.info("── sync-aas 시작")
         # Step 1
@@ -599,7 +609,7 @@ class CobotEDCPipeline:
         normalized = self._preprocess(raw)
         # Step 3
         shell, submodel = self._map_to_aas(normalized)
-        # Step 5 (optional)
+        # Step 5 (Ollama, 가능 시)
         ai_result  = self._ai_validate(normalized)
         # Step 6
         aas_result = self._upsert_aas(shell, submodel)
@@ -744,17 +754,17 @@ class CobotEDCPipeline:
         }
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Step 5: AI 검증 (optional)
+    # Step 5: AI 검증 (Ollama, 자동 시도)
     # ─────────────────────────────────────────────────────────────────────────
 
     def _ai_validate(self, normalized: NormalizedTelemetry) -> Dict[str, Any]:
         """Ollama AI로 텔레메트리 이상 징후를 분석합니다.
 
+        기본적으로 호출을 시도합니다. ``--no-ai`` 또는 ``CATENAX_DISABLE_AI`` 로 끌 수 있습니다.
         Ollama를 사용할 수 없어도 예외를 외부로 전파하지 않습니다.
-        전체 시스템은 AI 없이 정상 동작합니다.
         """
-        if not self._use_ai:
-            return {"ok": False, "reason": "AI 비활성화 (--use-ai 옵션 추가 후 재실행)"}
+        if self._ai_disabled:
+            return {"ok": False, "reason": "AI 비활성화 (--no-ai 또는 CATENAX_DISABLE_AI)"}
         if not _AI_AVAILABLE:
             return {"ok": False, "reason": "ai_helpers 모듈 없음"}
 
@@ -792,8 +802,11 @@ class CobotEDCPipeline:
 # 환경변수 기반 파이프라인 팩토리
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_pipeline_from_env(use_ai: bool = False) -> CobotEDCPipeline:
+def build_pipeline_from_env(ai_disabled: Optional[bool] = None) -> CobotEDCPipeline:
     """환경변수 설정에 따라 Mock 또는 실제 HTTP 클라이언트를 주입합니다.
+
+    ``ai_disabled`` 가 None이면 ``CATENAX_DISABLE_AI`` 환경 변수를 따릅니다.
+    프로그램에서 강제로 끄려면 ``build_pipeline_from_env(ai_disabled=True)``.
 
     ── 필수 환경변수 (실제 EDC 연동 시) ───────────────────────────────────────
     CATENAX_EDC_MANAGEMENT_URL   http://edc-provider:8080/management
@@ -804,6 +817,7 @@ def build_pipeline_from_env(use_ai: bool = False) -> CobotEDCPipeline:
     CATENAX_AAS_API_KEY          BaSyx API 키
     CATENAX_STORE_DIR            로컬 저장소 경로 (기본: ./store)
     CATENAX_MOCK_DATA_DIR        위와 동일 (이전 이름 호환)
+    CATENAX_DISABLE_AI           1/true/yes 이면 Ollama 단계 생략
     OLLAMA_BASE_URL              http://localhost:11434
     OLLAMA_MODEL                 llama3
     """
@@ -827,7 +841,7 @@ def build_pipeline_from_env(use_ai: bool = False) -> CobotEDCPipeline:
     else:
         LOGGER.info("AAS Mock 모드 (CATENAX_AAS_BASE_URL 미설정 → 로컬 저장소 사용)")
 
-    return CobotEDCPipeline(edc_client=edc_client, aas_client=aas_client, use_ai=use_ai)
+    return CobotEDCPipeline(edc_client=edc_client, aas_client=aas_client, ai_disabled=ai_disabled)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -941,10 +955,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             --telemetry-json sample_telemetry.json \\
             --provider-bpn BPNL000000000001
 
-        # 2. AI 포함 온보딩
+        # 2. AI 끄고 온보딩 (기본은 Ollama 자동 시도)
         python3 edc.py onboard \\
             --telemetry-json sample_telemetry.json \\
-            --provider-bpn BPNL000000000001 --use-ai
+            --provider-bpn BPNL000000000001 --no-ai
 
         # 3. AAS만 업데이트
         python3 edc.py sync-aas --telemetry-json sample_telemetry.json
@@ -978,8 +992,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
     p_on.add_argument("--policy-type",
                       choices=["bpn", "membership", "open"], default="bpn")
-    p_on.add_argument("--use-ai", action="store_true",
-                      help="Ollama AI 검증 활성화")
+    p_on.add_argument(
+        "--no-ai",
+        action="store_true",
+        help="Ollama AI 검증 생략 (기본: 가능하면 자동 호출)",
+    )
     p_on.add_argument(
         "--all-records",
         action="store_true",
@@ -989,7 +1006,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     # ── sync-aas ──────────────────────────────────────────────────────────────
     p_sync = sub.add_parser("sync-aas", help="AAS만 재동기화")
     p_sync.add_argument("--telemetry-json", required=True)
-    p_sync.add_argument("--use-ai", action="store_true")
+    p_sync.add_argument(
+        "--no-ai",
+        action="store_true",
+        help="Ollama AI 검증 생략 (기본: 가능하면 자동 호출)",
+    )
     p_sync.add_argument(
         "--all-records",
         action="store_true",
@@ -1003,14 +1024,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     sub.add_parser("list", help="등록된 에셋·AAS 목록 출력")
 
     args     = parser.parse_args(list(argv) if argv is not None else None)
-    use_ai   = getattr(args, "use_ai", False)
 
     logging.basicConfig(
         level  = getattr(logging, args.log_level),
         format = "%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
 
-    pipeline = build_pipeline_from_env(use_ai=use_ai)
+    no_ai = bool(getattr(args, "no_ai", False))
+    pipeline = build_pipeline_from_env(ai_disabled=True if no_ai else None)
 
     try:
         if args.command == "onboard":

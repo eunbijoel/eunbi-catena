@@ -257,7 +257,7 @@ def run_sample_pipeline() -> Dict[str, Any]:
 
     raw = json.loads(SAMPLE_JSON.read_text(encoding="utf-8"))
     records = edc._iter_telemetry_records(raw)
-    pipe = edc.build_pipeline_from_env(use_ai=False)
+    pipe = edc.build_pipeline_from_env(ai_disabled=True)
     provider = os.environ.get("CATENAX_PROVIDER_BPN", "BPNL000000000001")
     out = edc.run_onboard_from_records(
         pipe,
