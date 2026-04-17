@@ -118,8 +118,10 @@ def _ai_disabled_by_env() -> bool:
 
 def _store_root() -> Path:
     # GitHub 기본: CATENAX_STORE_DIR — 기존 로컬 실험과 호환: CATENAX_MOCK_DATA_DIR 도 허용
+    # 환경 변수 없을 때: catena-x/store (`edc.py`는 catena-x/apps/ 아래에 있음)
     base = os.environ.get("CATENAX_STORE_DIR") or os.environ.get("CATENAX_MOCK_DATA_DIR")
-    d = Path(base or str(_HERE / "store"))
+    default_store = _HERE.parent / "store"
+    d = Path(base or str(default_store))
     (d / "aas").mkdir(parents=True, exist_ok=True)
     (d / "edc").mkdir(parents=True, exist_ok=True)
     return d
@@ -815,7 +817,7 @@ def build_pipeline_from_env(ai_disabled: Optional[bool] = None) -> CobotEDCPipel
     CATENAX_EDC_API_KEY          EDC Management API 키
     CATENAX_AAS_BASE_URL         http://basyx:8081  (실제 BaSyx 연동 시)
     CATENAX_AAS_API_KEY          BaSyx API 키
-    CATENAX_STORE_DIR            로컬 저장소 경로 (기본: ./store)
+    CATENAX_STORE_DIR            로컬 저장소 경로 (미설정 시 catena-x/store)
     CATENAX_MOCK_DATA_DIR        위와 동일 (이전 이름 호환)
     CATENAX_DISABLE_AI           1/true/yes 이면 Ollama 단계 생략
     OLLAMA_BASE_URL              http://localhost:11434

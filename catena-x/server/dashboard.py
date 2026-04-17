@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Catena-X COBOT DATA SPACE — PoC 웹 대시보드 (표준 라이브러리만).
 
-``apps/catenax/edc.py`` mock 파이프라인과 동일 ``CATENAX_MOCK_DATA_DIR`` 를 읽어
+``apps/edc.py`` mock 파이프라인과 동일 ``CATENAX_MOCK_DATA_DIR`` 를 읽어
 KPI·플릿·알람을 표시하고, **Run Pipeline** 으로 샘플 텔레메트리 ingest 를 실행합니다.
 
 실행::
@@ -35,7 +35,7 @@ if str(_ROOT) not in sys.path:
 LOGGER = logging.getLogger("catena.dashboard")
 
 DEFAULT_MOCK = _ROOT / "data" / "catena_mock"
-SAMPLE_JSON = _ROOT / "apps" / "catenax" / "sample_telemetry.json"
+SAMPLE_JSON = _ROOT / "apps" / "sample_telemetry.json"
 
 
 def mock_dir() -> Path:
@@ -106,7 +106,7 @@ def _metrics_from_submodel(sub: Dict[str, Any]) -> Dict[str, Any]:
 def _sample_file_robot_stats() -> Dict[str, Any]:
     """``sample_telemetry.json`` 레코드 수·서로 다른 robot_id 개수."""
     try:
-        from apps.catenax import edc
+        from apps import edc
 
         raw = json.loads(SAMPLE_JSON.read_text(encoding="utf-8"))
         recs = edc._iter_telemetry_records(raw)
@@ -253,7 +253,7 @@ def run_sample_pipeline() -> Dict[str, Any]:
     os.environ["CATENAX_MOCK_DATA_DIR"] = str(d)
     os.environ["CATENAX_STORE_DIR"] = str(store_root)
 
-    from apps.catenax import edc
+    from apps import edc
 
     raw = json.loads(SAMPLE_JSON.read_text(encoding="utf-8"))
     records = edc._iter_telemetry_records(raw)
