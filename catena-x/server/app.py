@@ -254,6 +254,16 @@ class CobotTelemetryHandler(BaseHTTPRequestHandler):
             return
 
         body = store_telemetry(payload)
+        try:
+            from apps import telemetry_db as _tdb
+
+            _tdb.maybe_mirror_sqlite_after_file_store(
+                payload,
+                client_ip=self.client_address[0],
+                request_id=self.headers.get("X-Request-Id"),
+            )
+        except Exception:
+            LOGGER.exception("telemetry_db 미러 호출 실패")
         self._json(201, body)
 
 

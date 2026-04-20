@@ -5,7 +5,7 @@
 
 계층 구조
 ─────────
-RawTelemetry          ← 협동로봇에서 들어오는 원시 JSON 그대로
+RawTelemetry          ← 협동로봇에서 들어오는 raw JSON 그대로
   ↓ 전처리
 NormalizedTelemetry   ← 유효성 검증 + 단위 표준화 완료된 데이터
   ↓ 매핑

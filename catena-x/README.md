@@ -1,6 +1,6 @@
 # Catena-X SW 구현 예
 
-[대시보드](http://127.0.0.1:8765/dashboard.html) (대시보드를 실행한 PC의 IP로 http://<IP>:8765/dashboard.html) 
+[대시보드](http://127.0.0.1:8765/dashboard.html)
 
 ## Catena-X 정의
 
@@ -35,11 +35,16 @@
 ```
 catena-x/
 ├── apps/
-│   ├── edc.py                 # CLI: onboard, sync-aas, list, export-catalog
+│   ├── edc.py                 # CLI + CobotEDCPipeline(6단계 오케스트레이션)
+│   ├── edc_stores.py          # 로컬 store/ 폴더에 JSON으로 저장 | 실제 EDC·AAS HTTP 서버로 전송
+│   ├── telemetry_db.py        # 팀 SQL ER 정렬: SQLite 미러(선택) + PG DDL과 동일 테이블명
 │   ├── aas_mapper.py          # 전처리 + AAS 매핑
-│   ├── models.py              # Raw / Normalized 데이터 타입
+│   ├── models.py              # Raw / Normalized 데이터 타입 직렬화
 │   ├── ai_helpers.py          # Ollama 호출
-│   └── sample_telemetry.json  # 공통 샘플 1개 — 단일 로봇 객체 또는 로봇 배열 (`--all-records`)
+│   └── sample_telemetry.json  # 샘플 데이터— 단일 로봇 객체 또는 로봇 배열
+├── sql/
+│   ├── postgres_cobot_telemetry.sql  # 팀 ER 기준 PostgreSQL DDL
+│   └── README.md                     # 테이블 역할 + 앱 연동 설명
 ├── server/
 │   ├── app.py                 # 텔레메트리 HTTP 수신 → 디스크 저장
 │   └── catena_app.py          # 대시보드 + /api/dashboard (store 읽기)
@@ -267,14 +272,18 @@ python3 server/app.py --host 0.0.0.0 --port 8080
 | `CATENAX_DISABLE_AI`         | `1` / `true` / `yes` 이면 Ollama 단계 생략 (기본은 시도)    |
 | `CATENAX_EDC_MANAGEMENT_URL` | 설정 시 **실제** EDC Management API (미설정이면 로컬 mock)   |
 | `CATENAX_AAS_BASE_URL`       | 설정 시 **실제** AAS 서버 (미설정이면 로컬 파일)                 |
+| `COBOT_TELEMETRY_DB`         | SQLite 파일 경로. 설정 시 `POST /api/v1/cobot/telemetry` 수신마다 ER과 같은 테이블에 미러 (팀 PostgreSQL로 바꿀 때 스키마 참고용) |
 
 
 ### EDC mock은 “API 모양”을 염두에 둔 구현
 
-- **위치:** `apps/edc.py`  
+- **저장소·HTTP 클라이언트 위치:** `apps/edc_stores.py`  
+  - `**AASStore`**: Shell·Submodel을 `store/aas/*.json`에 쓰는 mock (실연동 시 `BaSyxAASClient`로 대체 가능).  
   - `**EDCStore`**: 자산·정책·계약정의·카탈로그를 `store/edc/*.json`에 쓰는 mock. 메서드 이름이 실제 연동과 같음 (`register_asset`, `register_policy`, `register_contract`, `upsert_catalog_entry`). 클래스 주석에 **실제 EDC Management API v3** 대응(`POST /v3/assets` 등)이 적혀 있음.  
-  - `**EDCHttpClient`**: 위와 같은 메서드로 `POST /v3/assets`, `/v3/policydefinitions`, `/v3/contractdefinitions` HTTP 호출(환경 변수로 켤 때).
-- **파이프라인:** `CobotEDCPipeline._register_edc()`에서 에셋 → 정책(접근·계약) → 계약 정의 → 카탈로그 순으로 처리; 클라이언트가 있으면 HTTP, 없으면 `EDCStore`로 분기.  
+  - `**EDCHttpClient`**: 위와 같은 메서드로 `POST /v3/assets`, `/v3/policydefinitions`, `/v3/contractdefinitions` HTTP 호출 (`CATENAX_EDC_MANAGEMENT_URL` 등으로 켤 때).  
+  - `**BaSyxAASClient`**: Shell·Submodel upsert용 BaSyx REST (`CATENAX_AAS_BASE_URL` 설정 시).
+- **파이프라인·CLI 위치:** `apps/edc.py` — `CobotEDCPipeline`, `build_pipeline_from_env`, `edc.py onboard` 등. `edc.py`가 `edc_stores`에서 클래스를 import 해 조립합니다.
+- **파이프라인 흐름:** `CobotEDCPipeline._register_edc()`에서 에셋 → 정책(접근·계약) → 계약 정의 → 카탈로그 순으로 처리; `EDCHttpClient`가 있으면 HTTP, 없으면 `EDCStore`로 분기.  
 - **지금은 대부분 “함수 호출 = JSON 파일 저장”**이고, **추후 API 호출로 바꾸기 쉽게** 작성 상태
 
 ---

@@ -466,7 +466,18 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         if errs:
             self._json(HTTPStatus.BAD_REQUEST, {"error": "validation failed", "details": errs})
             return
-        self._json(HTTPStatus.CREATED, store_telemetry(payload))
+        body = store_telemetry(payload)
+        try:
+            from apps import telemetry_db as _tdb
+
+            _tdb.maybe_mirror_sqlite_after_file_store(
+                payload,
+                client_ip=self.client_address[0],
+                request_id=self.headers.get("X-Request-Id"),
+            )
+        except Exception:
+            LOGGER.exception("telemetry_db 미러 호출 실패")
+        self._json(HTTPStatus.CREATED, body)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         LOGGER.info("%s %s", self.address_string(), fmt % args)
