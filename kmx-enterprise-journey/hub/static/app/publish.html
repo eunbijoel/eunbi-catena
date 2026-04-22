@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>게시</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="dataset.html">데이터셋</a>
+    <a href="catalog.html">공개 목록</a>
+  </nav>
+  <h1>카탈로그에 올리기</h1>
+  <p>«초안»만 «공개»로 바꿀 수 있습니다.</p>
+  <form id="f">
+    <label>데이터셋 번호</label>
+    <input name="did" type="number" min="1" required />
+    <label>작업자 이메일 (기록용)</label>
+    <input name="actor" type="email" placeholder="admin@company.kr" />
+    <button type="submit">공개하기</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      const actor = fd.get("actor").trim() || "user@local";
+      try {
+        const d = await api("/api/datasets/" + fd.get("did") + "/publish", {
+          method: "POST",
+          headers: { "X-Actor-Email": actor },
+        });
+        el.className = "out";
+        el.textContent = "공개했습니다.\n데이터셋 번호: " + d.id + "\n상태: " + d.status + "\n\n«공개 목록»에서 확인하세요.";
+      } catch (err) {
+        el.className = "out err";
+        el.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

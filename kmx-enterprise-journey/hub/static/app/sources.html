@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>내 원천</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="upload.html">파일</a>
+    <a href="connection.html">DB 연결</a>
+  </nav>
+  <h1>파일 · DB 연결 목록</h1>
+  <p class="hint">기업 번호를 넣고 불러오기.</p>
+  <form id="f">
+    <label>기업 번호</label>
+    <input name="tid" type="number" min="1" required />
+    <button type="submit">불러오기</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const tid = new FormData(e.target).get("tid");
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      try {
+        const files = await api("/api/tenants/" + tid + "/files");
+        const conns = await api("/api/tenants/" + tid + "/connections");
+        el.className = "out";
+        let t = "【파일 " + files.length + "건】\n";
+        t += files.length
+          ? files.map((f) => "· #" + f.id + " " + f.original_name + " (" + f.size_bytes + " B)").join("\n")
+          : "· 없음";
+        t += "\n\n【DB 연결 " + conns.length + "건】\n";
+        t += conns.length
+          ? conns
+              .map(
+                (c) =>
+                  "· #" + c.id + " " + c.label + " [" + c.engine + "] " + c.host + " / " + c.database
+              )
+              .join("\n")
+          : "· 없음";
+        el.textContent = t;
+      } catch (err) {
+        el.className = "out err";
+        el.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

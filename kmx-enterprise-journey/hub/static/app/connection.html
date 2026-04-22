@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DB 연결 정보</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="upload.html">파일</a>
+    <a href="sources.html">원천 모음</a>
+  </nav>
+  <h1>DB 연결 프로필</h1>
+  <p class="hint">
+    접속에 필요한 <strong>주소·포트·DB 이름</strong>만 저장합니다.
+    <strong>비밀번호는 저장하지 않습니다.</strong> 이후 EDC/커넥터나 비밀 금고(Vault)와 연결하면 됩니다.
+  </p>
+  <form id="f">
+    <label>기업 번호</label>
+    <input name="tid" type="number" min="1" required />
+    <label>이름 (구분용)</label>
+    <input name="label" required placeholder="예: MES 읽기 전용" />
+    <label>엔진</label>
+    <select name="engine">
+      <option value="postgresql">PostgreSQL</option>
+      <option value="mysql">MySQL / MariaDB</option>
+      <option value="mssql">MS SQL Server</option>
+      <option value="sqlite_file">SQLite (파일 경로)</option>
+    </select>
+    <label>호스트 (SQLite면 파일 경로)</label>
+    <input name="host" placeholder="db.company.local 또는 /path/to.db" />
+    <label>포트 (비우면 엔진 기본값)</label>
+    <input name="port" type="number" min="1" max="65535" placeholder="5432 등" />
+    <label>데이터베이스 이름</label>
+    <input name="database" placeholder="mes_prod" />
+    <label>DB 사용자 이름</label>
+    <input name="username" placeholder="읽기 전용 계정" />
+    <label>메모</label>
+    <textarea name="notes" rows="2" placeholder="VPN 필요 등"></textarea>
+    <label>작업자 이메일 (기록용)</label>
+    <input name="actor" type="email" />
+    <button type="submit">프로필 저장</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const tid = fd.get("tid");
+      const portRaw = fd.get("port").toString().trim();
+      const body = {
+        label: fd.get("label").trim(),
+        engine: fd.get("engine"),
+        host: fd.get("host").trim(),
+        port: portRaw ? parseInt(portRaw, 10) : null,
+        database: fd.get("database").trim(),
+        username: fd.get("username").trim(),
+        notes: fd.get("notes").trim(),
+      };
+      const actor = fd.get("actor").trim() || "user@local";
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      try {
+        const r = await api("/api/tenants/" + tid + "/connections", {
+          method: "POST",
+          headers: { "X-Actor-Email": actor },
+          json: true,
+          body: JSON.stringify(body),
+        });
+        el.className = "out";
+        el.textContent =
+          "저장했습니다.\n프로필 번호: " +
+          r.id +
+          "\n엔진: " +
+          r.engine +
+          "\n호스트: " +
+          r.host +
+          "\nDB: " +
+          r.database;
+      } catch (err) {
+        el.className = "out err";
+        el.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

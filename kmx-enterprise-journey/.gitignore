@@ -1,0 +1,6 @@
+data/hub_state.json
+hub_state.json
+data/uploads/
+__pycache__/
+*.pyc
+.venv/

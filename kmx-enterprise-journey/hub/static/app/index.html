@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KMX 셀프서비스 — 시작</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="landing">
+  <header class="landing-top">
+    <a href="index.html" class="landing-brand" style="text-decoration: none; color: inherit">
+      <span>K</span>
+      KMX 셀프서비스
+    </a>
+    <a class="lab" href="/lab">API 시험 · /docs →</a>
+  </header>
+
+  <section class="hero">
+    <h1>제조 데이터스페이스에 참여하기</h1>
+    <p class="lead">
+      <strong>역할을 나눴습니다.</strong> 가입을 넣은 사람과 승인하는 사람이 같으면 안 되므로,
+      <strong>기업 담당자</strong>용 메뉴와 <strong>허브(운영)</strong>용 메뉴를 화면에서 분리했습니다.
+    </p>
+  </section>
+
+  <div class="portals-wrap">
+    <section class="portal provider">
+      <h2>기업 담당자 (제공자)</h2>
+      <p class="lead2">등록·데이터·파일·DB 연결 등. <strong>승인은 이 칸에 없습니다</strong> — 허브 담당자만 오른쪽에서 처리합니다.</p>
+      <div class="tiles inner">
+        <a class="tile" href="register.html">
+          <div class="emoji">🏢</div>
+          <h3>기업 등록</h3>
+          <p>법인 정보 제출 → 대기</p>
+        </a>
+        <a class="tile" href="users.html">
+          <div class="emoji">👤</div>
+          <h3>담당자</h3>
+          <p>관리자·데이터 담당</p>
+        </a>
+        <a class="tile" href="dataset.html">
+          <div class="emoji">📋</div>
+          <h3>데이터셋</h3>
+          <p>카탈로그 설명 초안</p>
+        </a>
+        <a class="tile" href="publish.html">
+          <div class="emoji">🚀</div>
+          <h3>카탈로그 게시</h3>
+          <p>공개 전환</p>
+        </a>
+        <a class="tile" href="catalog.html">
+          <div class="emoji">🔍</div>
+          <h3>공개 목록</h3>
+          <p>카탈로그 조회</p>
+        </a>
+        <a class="tile" href="upload.html">
+          <div class="emoji">📤</div>
+          <h3>파일 올리기</h3>
+          <p>CSV·Excel 등 업로드</p>
+        </a>
+        <a class="tile" href="connection.html">
+          <div class="emoji">🗄️</div>
+          <h3>DB 연결 정보</h3>
+          <p>호스트·DB명 (비번 미저장)</p>
+        </a>
+        <a class="tile" href="sources.html">
+          <div class="emoji">📂</div>
+          <h3>내 원천</h3>
+          <p>파일·연결 목록</p>
+        </a>
+      </div>
+    </section>
+
+    <section class="portal hub">
+      <h2>허브 · 운영 담당자</h2>
+      <p class="lead2">협회·민간 운영 등. <strong>가입 요청 승인</strong>과 <strong>전체 활동 감사</strong>를 봅니다. 기업 등록 폼은 왼쪽만 사용하세요.</p>
+      <div class="tiles inner">
+        <a class="tile" href="approve.html">
+          <div class="emoji">✅</div>
+          <h3>기업 승인</h3>
+          <p>대기 목록 · BPN 입력</p>
+        </a>
+        <a class="tile" href="audit.html">
+          <div class="emoji">📜</div>
+          <h3>활동 기록</h3>
+          <p>감사 로그</p>
+        </a>
+      </div>
+    </section>
+  </div>
+
+  <footer class="landing-footer">
+    시작 주소: <code>/app/index.html</code> · 루트 <code>/</code> 는 여기로 연결됩니다.
+    <a href="/docs">/docs</a> · <a href="/redoc">ReDoc</a> · <a href="/lab">/lab</a>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,44 @@
+[
+  {
+    "robot_name": "sql-shape-a-01",
+    "assembly_line": "LINE-OLD-1",
+    "station_code": "ST-A1",
+    "cycle_ms": 1200.0,
+    "kw": 310.5,
+    "prog_name": "prog-a",
+    "run_state": "RUNNING",
+    "ok_count": 900,
+    "ng_count": 3,
+    "temp_c": 41.0,
+    "vib": 1.1,
+    "created_ts": "2025-02-01T10:00:00Z"
+  },
+  {
+    "robot_name": "sql-shape-a-02",
+    "assembly_line": "LINE-OLD-2",
+    "station_code": "ST-A2",
+    "cycle_ms": 0.0,
+    "kw": 55.0,
+    "prog_name": "idle-x",
+    "run_state": "IDLE",
+    "ok_count": 400,
+    "ng_count": 0,
+    "temp_c": 36.0,
+    "vib": 0.1,
+    "created_ts": "2025-02-01T10:05:00Z"
+  },
+  {
+    "robot_name": "sql-shape-a-03",
+    "assembly_line": "LINE-OLD-1",
+    "station_code": "ST-A3",
+    "cycle_ms": 900.0,
+    "kw": 400.0,
+    "prog_name": "prog-w",
+    "run_state": "WARNING",
+    "ok_count": 200,
+    "ng_count": 8,
+    "temp_c": 68.0,
+    "vib": 3.5,
+    "created_ts": "2025-02-01T10:07:00Z"
+  }
+]

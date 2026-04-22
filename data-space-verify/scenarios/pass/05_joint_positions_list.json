@@ -1,0 +1,17 @@
+{
+  "robot_id": "verify-listjoint-01",
+  "line_id": "line-d",
+  "station_id": "st-04",
+  "cycle_time_ms": 1600.0,
+  "power_watts": 350.0,
+  "program_name": "inspection-v1",
+  "status": "RUNNING",
+  "good_parts": 800,
+  "reject_parts": 2,
+  "temperature_c": 43.0,
+  "vibration_mm_s": 2.0,
+  "pose": { "x": 1.0, "y": 2.0, "z": 3.0, "rx": 0.0, "ry": 0.0, "rz": 0.0 },
+  "joint_positions_deg": [9.5, -22.0, 62.0, 11.0, 75.0, -6.0],
+  "alarms": [],
+  "produced_at": "2025-01-15T10:00:00Z"
+}

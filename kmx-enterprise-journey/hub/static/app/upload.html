@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>파일 올리기</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="connection.html">DB 연결</a>
+    <a href="sources.html">원천 모음</a>
+  </nav>
+  <h1>파일 올리기</h1>
+  <p class="hint">승인된 기업만 가능합니다. 파일은 서버의 <code>data/uploads/기업번호/</code> 에 저장됩니다. (최대 25MB)</p>
+  <form id="f">
+    <label>기업 번호</label>
+    <input name="tid" type="number" min="1" required />
+    <label>데이터셋 번호 (선택, 비우면 기업에만 붙음)</label>
+    <input name="did" type="number" min="1" placeholder="선택" />
+    <label>파일</label>
+    <input name="file" type="file" required />
+    <label>작업자 이메일 (기록용)</label>
+    <input name="actor" type="email" placeholder="you@company.kr" />
+    <button type="submit">업로드</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const tid = fd.get("tid");
+      const did = fd.get("did").toString().trim();
+      const actor = fd.get("actor").toString().trim() || "user@local";
+      const form = new FormData();
+      form.append("file", fd.get("file"));
+      if (did) form.append("dataset_id", did);
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      try {
+        const r = await fetch("/api/tenants/" + tid + "/files", {
+          method: "POST",
+          headers: { "X-Actor-Email": actor },
+          body: form,
+        });
+        const text = await r.text();
+        const data = text ? JSON.parse(text) : null;
+        if (!r.ok) throw new Error((data && data.detail) || text);
+        el.className = "out";
+        el.textContent =
+          "저장했습니다.\n파일 번호: " +
+          data.id +
+          "\n원래 이름: " +
+          data.original_name +
+          "\n크기: " +
+          data.size_bytes +
+          " 바이트\n저장 경로: " +
+          data.stored_path;
+      } catch (err) {
+        el.className = "out err";
+        el.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

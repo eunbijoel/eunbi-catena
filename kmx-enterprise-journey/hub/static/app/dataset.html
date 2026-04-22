@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>데이터셋</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="users.html">담당자</a>
+    <a href="publish.html">게시</a>
+    <a href="upload.html">파일</a>
+  </nav>
+  <h1>데이터셋 만들기</h1>
+  <p>처음에는 «초안»으로 저장됩니다. 다음 페이지에서 공개합니다.</p>
+  <form id="f">
+    <label>기업 번호</label>
+    <input name="tid" type="number" min="1" required />
+    <label>제목</label>
+    <input name="title" required placeholder="예: 3라인 설비 요약" />
+    <label>설명</label>
+    <textarea name="description" rows="3"></textarea>
+    <label>개인정보 포함</label>
+    <select name="pii">
+      <option value="false">아니오</option>
+      <option value="true">예</option>
+    </select>
+    <label>법적 근거</label>
+    <select name="legal">
+      <option value="none">해당 없음</option>
+      <option value="consent">동의</option>
+      <option value="contract">계약</option>
+      <option value="law">법률</option>
+    </select>
+    <label>한 줄 메모</label>
+    <input name="note" placeholder="내부 품질용 등" />
+    <label>작업자 이메일 (기록용)</label>
+    <input name="actor" type="email" placeholder="admin@company.kr" />
+    <button type="submit">저장</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      const actor = fd.get("actor").trim() || "user@local";
+      try {
+        const d = await api("/api/tenants/" + fd.get("tid") + "/datasets", {
+          method: "POST",
+          headers: { "X-Actor-Email": actor },
+          json: true,
+          body: JSON.stringify({
+            title: fd.get("title").trim(),
+            description: (fd.get("description") || "").trim(),
+            legal_basis_type: fd.get("legal"),
+            contains_personal_data: fd.get("pii") === "true",
+            confidentiality_note: (fd.get("note") || "").trim(),
+            visibility: "private",
+          }),
+        });
+        el.className = "out";
+        el.textContent =
+          "초안을 저장했습니다.\n\n데이터셋 번호(다음 단계에 필요): " +
+          d.id +
+          "\n상태: " +
+          d.status +
+          "\n\n다음: «카탈로그에 올리기» 페이지로 가세요.";
+      } catch (err) {
+        el.className = "out err";
+        el.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

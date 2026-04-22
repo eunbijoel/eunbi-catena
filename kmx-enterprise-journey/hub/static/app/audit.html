@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>활동 기록</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="approve.html">기업 승인</a>
+    <a href="catalog.html">공개 목록</a>
+  </nav>
+  <h1>활동 기록</h1>
+  <p>최근 기록부터 최대 40건입니다.</p>
+  <form id="f" style="margin-bottom: 0.5rem">
+    <label>기업 번호로만 보기 (비우면 전체)</label>
+    <input name="tid" type="number" min="1" placeholder="선택" />
+  </form>
+  <button type="button" id="go">불러오기</button>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("go").addEventListener("click", async () => {
+      const tid = document.querySelector("#f [name=tid]").value.trim();
+      const q = tid ? "?tenant_id=" + encodeURIComponent(tid) + "&limit=40" : "?limit=40";
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      try {
+        const rows = await api("/api/audit" + q);
+        el.className = "out";
+        if (!rows.length) {
+          el.textContent = "기록이 없습니다.";
+          return;
+        }
+        el.textContent = rows
+          .map(
+            (r) =>
+              "· " +
+              r.created_at +
+              " | " +
+              r.action +
+              " | " +
+              r.actor +
+              (r.tenant_id != null ? " | 기업 " + r.tenant_id : "")
+          )
+          .join("\n");
+      } catch (e) {
+        el.className = "out err";
+        el.textContent = e.message;
+      }
+    });
+  </script>
+</body>
+</html>

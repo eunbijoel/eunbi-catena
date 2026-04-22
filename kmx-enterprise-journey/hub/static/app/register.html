@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>기업 등록</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작 (역할 선택)</a>
+    <a href="upload.html">파일</a>
+    <a href="connection.html">DB</a>
+  </nav>
+  <h1>기업 등록 요청</h1>
+  <p class="hint"><strong>승인은 여기서 할 수 없습니다.</strong> 같은 사람이 등록·승인하면 안 되므로, 허브 담당자는 시작 화면 오른쪽 «허브» 메뉴에서만 승인합니다.</p>
+  <p>제출 후 상태는 «대기»입니다.</p>
+  <form id="f">
+    <label>회사 이름</label>
+    <input name="legal_name" required placeholder="예: (주)한빛제조" />
+    <label>사업자등록번호</label>
+    <input name="business_reg_no" required placeholder="123-45-67890" />
+    <label>담당자 이메일</label>
+    <input name="contact_email" type="email" required placeholder="kim@company.kr" />
+    <button type="submit">제출</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        legal_name: fd.get("legal_name").trim(),
+        business_reg_no: fd.get("business_reg_no").trim(),
+        contact_email: fd.get("contact_email").trim(),
+      };
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      try {
+        const t = await api("/api/tenants/register", { method: "POST", json: true, body: JSON.stringify(body) });
+        el.className = "out";
+        el.textContent =
+          "접수되었습니다.\n\n기업 번호(꼭 적어 두세요): " +
+          t.id +
+          "\n상태: " +
+          t.status +
+          "\n\n다음: «기업 승인» 페이지로 가서 이 번호를 승인합니다.";
+      } catch (err) {
+        el.className = "out err";
+        el.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+[
+  {
+    "device_id": "sql-shape-b-10",
+    "line": "L-B1",
+    "station_id": "ST-B1",
+    "cycle_time_ms": 2000.0,
+    "power_w": 480.0,
+    "program": "bolt-v2",
+    "status_label": "OK",
+    "gp": 1100,
+    "rp": 4,
+    "temp": 44.0,
+    "vibration": 2.2,
+    "ts": "2025-03-10T08:00:00Z"
+  },
+  {
+    "device_id": "sql-shape-b-11",
+    "line": "L-B2",
+    "station_id": "ST-B2",
+    "cycle_time_ms": 1750.0,
+    "power_w": 390.0,
+    "program": "pick-v1",
+    "status_label": "OK",
+    "gp": 1500,
+    "rp": 1,
+    "temp": 40.5,
+    "vibration": 1.4,
+    "ts": "2025-03-10T08:02:00Z"
+  }
+]

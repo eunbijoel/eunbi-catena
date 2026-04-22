@@ -1,0 +1,17 @@
+{
+  "robot_id": "midcorp-line3-robot-010",
+  "line_id": "FACTORY-SEOUL-ASSEMBLY-LINE-03-B-shift",
+  "station_id": "station-palletizer-A7-backup-unit",
+  "cycle_time_ms": 1750.25,
+  "power_watts": 410.0,
+  "program_name": "assembly-v4",
+  "status": "RUNNING",
+  "good_parts": 1390,
+  "reject_parts": 6,
+  "temperature_c": 45.0,
+  "vibration_mm_s": 2.0,
+  "pose": { "x": 380.0, "y": 90.0, "z": 255.0, "rx": 179.5, "ry": -0.8, "rz": 91.0 },
+  "joint_positions_deg": { "j1": 10.0, "j2": -23.0, "j3": 64.0, "j4": 12.5, "j5": 78.0, "j6": -7.0 },
+  "alarms": [],
+  "produced_at": "2025-01-16T12:00:00Z"
+}

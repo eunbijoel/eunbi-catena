@@ -1,0 +1,17 @@
+{
+  "robot_id": "verify-fault-01",
+  "line_id": "line-b",
+  "station_id": "station-02",
+  "cycle_time_ms": 1950.0,
+  "power_watts": 470.5,
+  "program_name": "welding-v5",
+  "status": "FAULT",
+  "good_parts": 100,
+  "reject_parts": 5,
+  "temperature_c": 88.0,
+  "vibration_mm_s": 12.0,
+  "pose": { "x": 300.0, "y": 80.0, "z": 210.0, "rx": 175.0, "ry": -5.0, "rz": 95.0 },
+  "joint_positions_deg": { "j1": 20.0, "j2": -40.0, "j3": 90.0, "j4": 0.0, "j5": 50.0, "j6": -20.0 },
+  "alarms": ["ALM-OVERHEAT"],
+  "produced_at": "2025-01-15T09:00:00Z"
+}

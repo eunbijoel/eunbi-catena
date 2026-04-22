@@ -1,0 +1,8 @@
+{
+  "line_id": "line-x",
+  "station_id": "st-x",
+  "cycle_time_ms": 100.0,
+  "power_watts": 50.0,
+  "program_name": "x",
+  "status": "RUNNING"
+}

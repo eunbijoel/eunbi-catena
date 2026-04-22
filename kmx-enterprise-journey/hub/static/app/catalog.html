@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>공개 목록</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작</a>
+    <a href="publish.html">게시</a>
+    <a href="audit.html">활동 기록</a>
+  </nav>
+  <h1>공개 목록</h1>
+  <p>지금 카탈로그에 올라가 있는 데이터입니다.</p>
+  <button type="button" id="go">불러오기</button>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("go").addEventListener("click", async () => {
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      try {
+        const rows = await api("/api/catalog/datasets");
+        el.className = "out";
+        if (!rows.length) {
+          el.textContent = "공개된 항목이 없습니다.";
+          return;
+        }
+        el.textContent = rows
+          .map((r) => "· 번호 " + r.id + " — " + r.title + " (기업 " + r.tenant_id + ")")
+          .join("\n");
+      } catch (e) {
+        el.className = "out err";
+        el.textContent = e.message;
+      }
+    });
+  </script>
+</body>
+</html>

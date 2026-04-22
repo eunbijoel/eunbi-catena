@@ -1,0 +1,17 @@
+{
+  "robot_id": "verify-idle-01",
+  "line_id": "line-c",
+  "station_id": "station-idle",
+  "cycle_time_ms": 0.0,
+  "power_watts": 60.0,
+  "program_name": "IDLE",
+  "status": "IDLE",
+  "good_parts": 500,
+  "reject_parts": 0,
+  "temperature_c": 38.0,
+  "vibration_mm_s": 0.2,
+  "pose": {},
+  "joint_positions_deg": {},
+  "alarms": [],
+  "produced_at": "2025-01-15T08:00:00Z"
+}

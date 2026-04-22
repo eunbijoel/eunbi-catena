@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>기업 승인</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="sub">
+  <nav class="top">
+    <a href="index.html">← 시작 (역할 선택)</a>
+    <a href="audit.html">활동 기록</a>
+  </nav>
+  <h1>기업 승인</h1>
+  <p class="hint"><strong>허브·운영 담당자 전용.</strong> 기업 등록은 왼쪽 «기업 담당자» 메뉴에서만 합니다.</p>
+  <p>아래는 «대기» 중인 기업입니다. BPN은 비워도 됩니다.</p>
+  <button type="button" class="secondary" id="reload">목록 새로고침</button>
+  <div id="list"></div>
+  <hr style="margin: 1.5rem 0" />
+  <h2>번호로 직접 승인</h2>
+  <form id="f">
+    <label>기업 번호</label>
+    <input name="tid" type="number" min="1" required />
+    <label>BPN (선택)</label>
+    <input name="bpn" placeholder="비우면 없음" />
+    <label>처리자 이메일 (기록용)</label>
+    <input name="actor" type="email" placeholder="hub@example.org" />
+    <button type="submit">승인</button>
+  </form>
+  <div id="out" class="out" style="display: none"></div>
+  <script src="api.js"></script>
+  <script>
+    async function load() {
+      const box = document.getElementById("list");
+      box.innerHTML = "불러오는 중…";
+      try {
+        const rows = await api("/api/tenants");
+        const pend = rows.filter((t) => t.status === "pending");
+        if (!pend.length) {
+          box.innerHTML = "<p>대기 중인 기업이 없습니다.</p>";
+          return;
+        }
+        box.innerHTML = "";
+        pend.forEach((t) => {
+          const d = document.createElement("div");
+          d.className = "card";
+          d.innerHTML =
+            "<strong>" +
+            esc(t.legal_name) +
+            "</strong><br/>번호: " +
+            t.id +
+            "<br/>담당: " +
+            esc(t.contact_email) +
+            '<br/><label style="margin-top:0.5rem">BPN</label><input type="text" class="bpn" data-tid="' +
+            t.id +
+            '" placeholder="선택" />' +
+            '<br/><button type="button" class="go" data-tid="' +
+            t.id +
+            '">이 기업 승인</button>';
+          box.appendChild(d);
+        });
+        box.querySelectorAll("button.go").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const tid = parseInt(btn.dataset.tid, 10);
+            const inp = box.querySelector('.bpn[data-tid="' + tid + '"]');
+            const actor = (document.getElementById("f").querySelector('[name="actor"]') || {}).value;
+            doApprove(tid, inp && inp.value, actor);
+          });
+        });
+      } catch (e) {
+        box.innerHTML = "<p class='out err'>" + esc(e.message) + "</p>";
+      }
+    }
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+    async function doApprove(tid, bpn, actor) {
+      const el = document.getElementById("out");
+      el.style.display = "block";
+      const act = (actor || "").trim() || "hub@local";
+      const bp = bpn && String(bpn).trim() ? String(bpn).trim() : null;
+      try {
+        const t = await api("/api/tenants/" + tid + "/approve", {
+          method: "POST",
+          headers: { "X-Actor-Email": act },
+          json: true,
+          body: JSON.stringify({ bpn: bp }),
+        });
+        el.className = "out";
+        el.textContent = "승인했습니다.\n기업 번호: " + t.id + "\n상태: " + t.status + (t.bpn ? "\nBPN: " + t.bpn : "");
+        load();
+      } catch (e) {
+        el.className = "out err";
+        el.textContent = e.message;
+      }
+    }
+    document.getElementById("reload").addEventListener("click", load);
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await doApprove(parseInt(fd.get("tid"), 10), fd.get("bpn"), fd.get("actor"));
+    });
+    load();
+  </script>
+</body>
+</html>

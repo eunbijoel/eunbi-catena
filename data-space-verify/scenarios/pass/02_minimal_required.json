@@ -1,0 +1,9 @@
+{
+  "robot_id": "sme-minimal-001",
+  "line_id": "L1",
+  "station_id": "S1",
+  "cycle_time_ms": 1500.0,
+  "power_watts": 300.0,
+  "program_name": "default-prog",
+  "status": "RUNNING"
+}

@@ -1,0 +1,9 @@
+{
+  "robot_id": "bad-cycle-01",
+  "line_id": "line-x",
+  "station_id": "st-x",
+  "cycle_time_ms": "not-a-number",
+  "power_watts": 50.0,
+  "program_name": "x",
+  "status": "RUNNING"
+}
