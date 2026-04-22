@@ -25,7 +25,7 @@ Non-Goal
 전체 데이터 흐름 (6단계)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  sample_telemetry.json
+  sample_telemetry.json  또는  Postgres ``cobot_telemetry_raw.payload`` (--from-postgres)
          │
          ▼  [Step 1] raw data mapping
   RawTelemetry
@@ -135,6 +135,75 @@ def _load_telemetry_records(path: Path) -> List[Dict[str, Any]]:
     """파일에서 JSON 읽어 ``_iter_telemetry_records`` 로 정규화."""
     raw = json.loads(path.read_text(encoding="utf-8"))
     return _iter_telemetry_records(raw)
+
+
+def load_telemetry_records_from_postgres(
+    limit: int,
+    robot_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """``cobot_telemetry_raw`` 의 ``payload`` (JSONB) 를 ``received_at`` 최신순으로 읽는다.
+
+    DSN: ``telemetry_db`` 와 동일하게 ``COBOT_DATABASE_URL`` 또는 ``DATABASE_URL``.
+    """
+    from telemetry_db import T_RAW, _normalize_postgres_dsn, _postgres_dsn_from_env
+
+    dsn = _postgres_dsn_from_env()
+    if not dsn:
+        raise ValueError("Postgres를 쓰려면 COBOT_DATABASE_URL 또는 DATABASE_URL 을 설정하세요.")
+    try:
+        import psycopg2
+    except ImportError as exc:
+        raise RuntimeError("psycopg2 필요: catena-x 에서 pip install -r requirements.txt") from exc
+
+    lim = max(1, min(int(limit), 10_000))
+    rid = (robot_id or "").strip() or None
+
+    params: List[Any] = []
+    where = "TRUE"
+    if rid:
+        where = "robot_id = %s"
+        params.append(rid)
+    params.append(lim)
+    sql = (
+        f"SELECT payload FROM {T_RAW} WHERE {where} "
+        "ORDER BY received_at DESC LIMIT %s"
+    )
+
+    conn = psycopg2.connect(_normalize_postgres_dsn(dsn))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    out: List[Dict[str, Any]] = []
+    for (pl,) in rows:
+        if isinstance(pl, dict):
+            rec = pl
+        elif isinstance(pl, str):
+            rec = json.loads(pl)
+        else:
+            rec = json.loads(json.dumps(pl, default=str))
+        if not isinstance(rec, dict):
+            raise ValueError(f"payload 가 객체가 아님: {type(rec).__name__}")
+        out.append(rec)
+    if not out:
+        raise ValueError("Postgres에서 가져온 텔레메트리가 없습니다 (테이블·필터 확인).")
+    LOGGER.info("Postgres에서 텔레메트리 %d건 로드 (limit=%s robot_id=%s)", len(out), lim, rid or "*")
+    return out
+
+
+def _cli_load_records(args: argparse.Namespace) -> List[Dict[str, Any]]:
+    if getattr(args, "from_postgres", False):
+        return load_telemetry_records_from_postgres(
+            limit=int(getattr(args, "postgres_limit", 50) or 50),
+            robot_id=getattr(args, "postgres_robot_id", None),
+        )
+    tj = getattr(args, "telemetry_json", None)
+    if not tj:
+        raise ValueError("--telemetry-json PATH 가 필요합니다 (--from-postgres 가 아닐 때).")
+    return _load_telemetry_records(Path(tj))
 
 
 def run_onboard_from_records(
@@ -555,7 +624,7 @@ def build_pipeline_from_env(ai_disabled: Optional[bool] = None) -> CobotEDCPipel
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _cmd_onboard(args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
-    records = _load_telemetry_records(Path(args.telemetry_json))
+    records = _cli_load_records(args)
     if not getattr(args, "all_records", False):
         records = records[:1]
     results: List[Dict[str, Any]] = []
@@ -583,7 +652,7 @@ def _cmd_onboard(args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
 
 
 def _cmd_sync_aas(args: argparse.Namespace, pipeline: CobotEDCPipeline) -> None:
-    records = _load_telemetry_records(Path(args.telemetry_json))
+    records = _cli_load_records(args)
     if not getattr(args, "all_records", False):
         records = records[:1]
     results: List[Dict[str, Any]] = [pipeline.sync_aas(raw) for raw in records]
@@ -669,6 +738,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         # 3. AAS만 업데이트
         python3 edc.py sync-aas --telemetry-json sample_telemetry.json
 
+        # 3b. Postgres 최근 20건으로 온보딩 (DSN 환경 변수 필요)
+        python3 edc.py onboard --from-postgres --postgres-limit 20 \\
+            --provider-bpn BPNL000000000001
+
         # 4. 카탈로그 확인
         python3 edc.py export-catalog
 
@@ -687,7 +760,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     # ── onboard ───────────────────────────────────────────────────────────────
     p_on = sub.add_parser("onboard", help="전체 파이프라인 실행 (raw → AAS + EDC)")
-    p_on.add_argument("--telemetry-json",     required=True)
+    _src_on = p_on.add_mutually_exclusive_group(required=True)
+    _src_on.add_argument(
+        "--telemetry-json",
+        metavar="PATH",
+        help="텔레메트리 JSON 파일 (단일 객체 또는 배열)",
+    )
+    _src_on.add_argument(
+        "--from-postgres",
+        action="store_true",
+        help="cobot_telemetry_raw.payload 를 최신순으로 읽기 (COBOT_DATABASE_URL / DATABASE_URL)",
+    )
+    p_on.add_argument(
+        "--postgres-limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="--from-postgres 시 최대 N행 (기본 50, 상한 10000)",
+    )
+    p_on.add_argument(
+        "--postgres-robot-id",
+        default=None,
+        metavar="ROBOT_ID",
+        help="--from-postgres 시 해당 robot_id 만",
+    )
     p_on.add_argument("--provider-bpn",       required=True)
     p_on.add_argument("--cobot-api-base-url", default="http://localhost:8080")
     p_on.add_argument("--cobot-data-path",    default="/api/v1/cobot/telemetry")
@@ -711,7 +807,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     # ── sync-aas ──────────────────────────────────────────────────────────────
     p_sync = sub.add_parser("sync-aas", help="AAS만 재동기화")
-    p_sync.add_argument("--telemetry-json", required=True)
+    _src_sy = p_sync.add_mutually_exclusive_group(required=True)
+    _src_sy.add_argument("--telemetry-json", metavar="PATH", help="텔레메트리 JSON 파일")
+    _src_sy.add_argument(
+        "--from-postgres",
+        action="store_true",
+        help="cobot_telemetry_raw.payload 를 최신순으로 읽기",
+    )
+    p_sync.add_argument(
+        "--postgres-limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="--from-postgres 시 최대 N행 (기본 50)",
+    )
+    p_sync.add_argument(
+        "--postgres-robot-id",
+        default=None,
+        metavar="ROBOT_ID",
+        help="--from-postgres 시 해당 robot_id 만",
+    )
     p_sync.add_argument(
         "--no-ai",
         action="store_true",
@@ -757,6 +872,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 1
     except (EDCStoreError, AASStoreError) as exc:
         LOGGER.error("저장소 오류: %s", exc)
+        return 1
+    except Exception as exc:
+        LOGGER.error("%s", exc)
         return 1
     except KeyboardInterrupt:
         return 0
