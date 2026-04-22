@@ -326,6 +326,68 @@
     header { padding: 12px 16px; }
     .kpi-value { font-size: 24px; }
   }
+
+  /* ── AI chat dock (Qwen / Ollama) ───────────────────────────────────────── */
+  #ai-chat-fab {
+    position: fixed; right: 20px; bottom: 20px; z-index: 300;
+    width: 52px; height: 52px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #020617; font-weight: 800; font-size: 13px; font-family: var(--font-mono);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; box-shadow: 0 8px 28px rgba(0,194,255,.35);
+    border: none; letter-spacing: .06em;
+  }
+  #ai-chat-fab:hover { transform: scale(1.05); }
+  #ai-chat-panel {
+    position: fixed; right: 20px; bottom: 84px; z-index: 299;
+    width: min(400px, calc(100vw - 40px)); max-height: min(520px, 70vh);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; display: none; flex-direction: column;
+    box-shadow: 0 20px 50px rgba(0,0,0,.45); overflow: hidden;
+  }
+  #ai-chat-panel.open { display: flex; }
+  .ai-chat-head {
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    background: rgba(17,24,39,.95);
+  }
+  .ai-chat-title { font-size: 11px; font-family: var(--font-mono); color: var(--accent); letter-spacing: .1em; }
+  .ai-chat-sub { font-size: 9px; color: var(--muted); font-family: var(--font-mono); }
+  .ai-chat-close {
+    border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1;
+  }
+  #ai-chat-msgs {
+    flex: 1; overflow-y: auto; padding: 12px 14px; font-size: 12px; line-height: 1.45;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .ai-msg-user {
+    align-self: flex-end; max-width: 92%;
+    background: rgba(0,194,255,.12); border: 1px solid rgba(0,194,255,.25);
+    border-radius: 12px 12px 4px 12px; padding: 8px 11px; color: var(--text); font-family: var(--font-mono);
+  }
+  .ai-msg-bot {
+    align-self: flex-start; max-width: 96%;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 12px 12px 12px 4px; padding: 8px 11px; color: var(--text); white-space: pre-wrap;
+  }
+  .ai-msg-meta { font-size: 9px; color: var(--muted); margin-top: 4px; font-family: var(--font-mono); }
+  .ai-chat-foot { border-top: 1px solid var(--border); padding: 10px 12px 12px; background: rgba(13,20,33,.98); }
+  .ai-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .ai-chip {
+    font-size: 10px; font-family: var(--font-mono); padding: 4px 8px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface2); color: var(--muted); cursor: pointer;
+  }
+  .ai-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .ai-input-row { display: flex; gap: 8px; }
+  #ai-chat-input {
+    flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: 12px;
+  }
+  #ai-chat-send {
+    border: 1px solid var(--accent); background: rgba(0,194,255,.15); color: var(--accent);
+    border-radius: 8px; padding: 0 14px; font-size: 11px; font-family: var(--font-mono); cursor: pointer;
+  }
+  #ai-chat-send:disabled { opacity: .5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -482,10 +544,65 @@
 
 </div><!-- /page -->
 
+<button type="button" id="ai-chat-fab" title="AI 도우미" onclick="toggleAiChat()">AI</button>
+<div id="ai-chat-panel" aria-label="대시보드 AI 도우미">
+  <div class="ai-chat-head">
+    <div>
+      <div class="ai-chat-title">HELPER · Qwen (Ollama)</div>
+    </div>
+    <button type="button" class="ai-chat-close" onclick="toggleAiChat()">×</button>
+  </div>
+  <div id="ai-chat-msgs"></div>
+  <div class="ai-chat-foot">
+    <div class="ai-chips">
+      <button type="button" class="ai-chip" onclick="sendAiChatPreset('텔레메트리 JSON 필수 키와 타입을 bullet로 알려줘')">필수 필드</button>
+      <button type="button" class="ai-chip" onclick="sendAiChatPreset('온보딩하려면 터미널에서 어떤 명령을 쓰면 되는지 예시를 줘')">온보딩 예시</button>
+      <button type="button" class="ai-chip" onclick="sendAiChatPreset('검증 실패가 나면 무엇부터 확인하면 좋은지 짧게')">검증 팁</button>
+    </div>
+    <div class="ai-input-row">
+      <input id="ai-chat-input" type="text" placeholder="질문 입력… (Enter로 전송)" autocomplete="off"
+        onkeydown="if(event.key==='Enter')sendAiChat()" />
+      <button type="button" id="ai-chat-send" onclick="sendAiChat()">전송</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Config ──────────────────────────────────────────────────────────────────
-const API_BASE = '';   // same origin; change to 'http://localhost:8080' if needed
-const REFRESH_MS = 15_000;
+/**
+ * 기본은 '' → 같은 호스트의 ``/api/...`` (``python3 server/catena_app.py`` 가 루트에 API 둘 때).
+ * 자동으로 pathname 에서 접두사를 잡으면 ``/foo/dashboard.html`` 일 때 ``/foo/api/...`` 로 가는데,
+ * 서버가 여전히 ``/api/...`` 만 받으면 HTTP 404 + unknown path 가 납니다. 그래서 자동 추론은 끕니다.
+ *
+ * 필요할 때만 (로드 전에) 설정:
+ *   <script>window.CATENAX_API_BASE = 'http://127.0.0.1:8080';<\/script>
+ * 서브경로 + nginx 가 그대로 넘길 때 서버에 ``CATENAX_URL_PREFIX`` 도 맞추세요.
+ * 옵션: ``window.CATENAX_INFER_API_PREFIX = true`` 하면 예전처럼 dashboard.html 앞 경로를 접두사로 씀.
+ */
+function inferApiBaseFromLocation() {
+  try {
+    const path = window.location.pathname || '/';
+    const suf = 'dashboard.html';
+    if (path.toLowerCase().endsWith(suf)) {
+      return path.slice(0, path.length - suf.length).replace(/\/+$/, '');
+    }
+  } catch (e) { /* ignore */ }
+  return '';
+}
+const API_BASE =
+  typeof window.CATENAX_API_BASE === 'string'
+    ? window.CATENAX_API_BASE
+    : window.CATENAX_INFER_API_PREFIX === true
+      ? inferApiBaseFromLocation()
+      : '';
+const REFRESH_MS = 15000;
+
+/** API_BASE 끝 슬래시·이중 슬래시 방지 */
+function apiUrl(subpath) {
+  const base = (API_BASE || '').replace(/\/+$/, '');
+  const p = (subpath || '').startsWith('/') ? subpath : '/' + subpath;
+  return (base || '') + p;
+}
 
 // ── Chart instances ──────────────────────────────────────────────────────────
 const charts = {};
@@ -509,25 +626,105 @@ const ROBOT_PALETTE = ['#00c2ff','#00e5a0','#f5c542','#ff6b6b','#a78bfa','#fb923
 function robotColor(i) { return ROBOT_PALETTE[i % ROBOT_PALETTE.length]; }
 
 // ── Fetch dashboard data ─────────────────────────────────────────────────────
+const FETCH_DASHBOARD_MS = 18000;
+/** renderAll(Chart.js 등)이 메인 스레드를 잡으면 finally 가 안 돌아 스피너가 영구 표시될 수 있음 → 폴백 */
+const RENDER_STALL_MS = 45000;
+let _loadDataFailSafeTimer = null;
+
+function _hideLoadingOverlay() {
+  const el = document.getElementById('loading');
+  if (el) el.style.display = 'none';
+}
+
+function _scheduleRenderStallWatch() {
+  if (_loadDataFailSafeTimer) clearTimeout(_loadDataFailSafeTimer);
+  document.body.dataset.dashboardReady = '0';
+  _loadDataFailSafeTimer = setTimeout(() => {
+    _loadDataFailSafeTimer = null;
+    if (document.body.dataset.dashboardReady === '1') return;
+    _hideLoadingOverlay();
+    showError('화면 그리기가 멈춘 것 같습니다(차트/데이터 과다). 새로고침하거나 브라우저 개발자 도구 Console 탭을 확인하세요.');
+  }, RENDER_STALL_MS);
+}
+
+function _clearRenderStallWatch() {
+  if (_loadDataFailSafeTimer) {
+    clearTimeout(_loadDataFailSafeTimer);
+    _loadDataFailSafeTimer = null;
+  }
+}
+
 async function loadData() {
+  const apiTarget = apiUrl('/api/dashboard');
+  console.info('[Catena] loadData →', apiTarget, '(Network 탭에서 Fetch/XHR 필터로 확인)');
+  const loadingEl = document.getElementById('loading');
+  if (window.location.protocol === 'file:') {
+    showError('file:// 로 열면 브라우저가 /api/dashboard 에 접속할 수 없습니다. catena_app 실행 후 http://127.0.0.1:8765/dashboard.html 로 여세요.');
+    _hideLoadingOverlay();
+    return;
+  }
+  _scheduleRenderStallWatch();
+  const ctrl = new AbortController();
+  let timer = setTimeout(() => ctrl.abort(), FETCH_DASHBOARD_MS);
   try {
-    const res = await fetch(`${API_BASE}/api/dashboard`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const res = await fetch(apiUrl('/api/dashboard'), { signal: ctrl.signal });
+    clearTimeout(timer);
+    timer = null;
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${t ? ': ' + t.slice(0, 120) : ''}`);
+    }
+    let data;
+    let jsonTimeoutId = null;
+    try {
+      data = await Promise.race([
+        res.json(),
+        new Promise((_, rej) => {
+          jsonTimeoutId = setTimeout(
+            () => rej(new Error('응답 본문(JSON) 읽기 시간 초과')),
+            Math.min(12000, FETCH_DASHBOARD_MS),
+          );
+        }),
+      ]);
+    } catch (je) {
+      throw je instanceof Error ? je : new Error(String(je));
+    } finally {
+      if (jsonTimeoutId) clearTimeout(jsonTimeoutId);
+    }
+    /* API 데이터까지 왔으면 스피너는 즉시 끔 — 이후 renderAll 이 메인 스레드를 잡아도 안 보임 */
+    _hideLoadingOverlay();
     hideError();
-    renderAll(data);
-    document.getElementById('last-update').textContent =
-      'Updated ' + new Date().toLocaleTimeString();
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    try {
+      renderAll(data);
+      document.body.dataset.dashboardReady = '1';
+    } catch (re) {
+      console.error(re);
+      document.body.dataset.dashboardReady = '1';
+      showError(`API 응답은 왔지만 화면 렌더 실패: ${re.message}`);
+    }
+    const lu = document.getElementById('last-update');
+    if (lu) lu.textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (err) {
-    showError(`Cannot reach API: ${err.message} — Is the server running? (python3 server/catena_app.py)`);
+    const msg = err.name === 'AbortError'
+      ? `${FETCH_DASHBOARD_MS / 1000}초 안에 응답 없음 — 서버가 꺼졌거나 주소가 다른 포트/호스트일 수 있습니다 (${apiUrl('/api/dashboard')})`
+      : err.message;
+    showError(`API 연결 실패: ${msg} — catena-x 에서 python3 server/catena_app.py`);
+    document.body.dataset.dashboardReady = '1';
   } finally {
-    document.getElementById('loading').style.display = 'none';
+    if (timer) clearTimeout(timer);
+    _clearRenderStallWatch();
+    _hideLoadingOverlay();
   }
 }
 
 // ── Render everything ────────────────────────────────────────────────────────
 function renderAll(data) {
-  const { summary, robots, catalog, chart_data } = data;
+  data = data || {};
+  const summary = data.summary || {};
+  const robots = Array.isArray(data.robots) ? data.robots : [];
+  const catalog = Array.isArray(data.catalog) ? data.catalog : [];
+  const chart_data = data.chart_data || {};
 
   // KPIs
   setText('kpi-robots',  summary.robot_count);
@@ -651,26 +848,31 @@ function makeBarChart(id, labels, values, colors, yLabel) {
 }
 
 function renderCharts(cd) {
-  const labels  = cd.yield_by_robot.map(d => d.robot_id);
+  cd = cd || {};
+  const ybr = cd.yield_by_robot || [];
+  const pbr = cd.power_by_robot || [];
+  const tbr = cd.temp_by_robot || [];
+  const cbr = cd.cycle_time_by_robot || [];
+  const labels  = ybr.map(d => d.robot_id);
   const colors  = labels.map((_, i) => robotColor(i));
 
   // Yield
   makeBarChart('chart-yield',
-    labels, cd.yield_by_robot.map(d => d.yield_pct), colors, '%');
+    labels, ybr.map(d => d.yield_pct), colors, '%');
 
   // Power
   makeBarChart('chart-power',
-    labels, cd.power_by_robot.map(d => d.power_w), colors, 'W');
+    labels, pbr.map(d => d.power_w), colors, 'W');
 
   // Temp
-  const tempLabels = cd.temp_by_robot.map(d => d.robot_id);
-  const tempVals   = cd.temp_by_robot.map(d => d.temp_c);
+  const tempLabels = tbr.map(d => d.robot_id);
+  const tempVals   = tbr.map(d => d.temp_c);
   const tempColors = tempVals.map(t => t > 70 ? 'rgba(255,59,92,.7)' : t > 55 ? 'rgba(245,197,66,.7)' : 'rgba(0,229,160,.7)');
   makeBarChart('chart-temp', tempLabels, tempVals, tempColors, '°C');
 
   // Cycle time
   makeBarChart('chart-cycle',
-    labels, cd.cycle_time_by_robot.map(d => d.cycle_ms), colors, 'ms');
+    labels, cbr.map(d => d.cycle_ms), colors, 'ms');
 
   // Robots per line
   const byLine = cd.robots_by_line || [];
@@ -691,8 +893,9 @@ function renderCharts(cd) {
   {
     const ctx = document.getElementById('chart-status').getContext('2d');
     if (charts['chart-status']) charts['chart-status'].destroy();
-    const sLabels = cd.status_pie.map(d => d.status);
-    const sVals   = cd.status_pie.map(d => d.count);
+    const pie = cd.status_pie || [];
+    const sLabels = pie.map(d => d.status);
+    const sVals   = pie.map(d => d.count);
     const sCols   = sLabels.map(s => STATUS_COLORS[s] || '#334155');
     charts['chart-status'] = new Chart(ctx, {
       type: 'doughnut',
@@ -746,7 +949,7 @@ function renderCharts(cd) {
 function renderCatalog(catalog) {
   const tbody = document.getElementById('catalog-body');
   tbody.innerHTML = '';
-  if (!catalog.length) {
+  if (!Array.isArray(catalog) || !catalog.length) {
     tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center;padding:20px">No catalog entries</td></tr>';
     return;
   }
@@ -772,7 +975,7 @@ async function openDetail(robotId) {
   document.getElementById('detail-overlay').classList.add('open');
 
   try {
-    const res = await fetch(`${API_BASE}/api/robots/${robotId}`);
+    const res = await fetch(apiUrl('/api/robots/' + encodeURIComponent(robotId)));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderDetail(data);
@@ -861,6 +1064,66 @@ document.getElementById('detail-overlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeDetail();
 });
 
+// ── AI chat (POST /api/ai/chat) ─────────────────────────────────────────────
+let aiChatOpen = false;
+function toggleAiChat() {
+  aiChatOpen = !aiChatOpen;
+  const p = document.getElementById('ai-chat-panel');
+  p.classList.toggle('open', aiChatOpen);
+  const box = document.getElementById('ai-chat-msgs');
+  if (aiChatOpen && box.children.length === 0) {
+    box.innerHTML = '<div class="ai-msg-bot">404·unknown path 면 채팅이 <b>/api/ai/chat</b> 가 아닌 주소로 가는 중입니다. 주소가 <code>…/something/dashboard.html</code> 인데 API는 루트에만 있으면 <code>window.CATENAX_API_BASE</code> 를 빈 값으로 두고(기본) 같은 포트의 <code>catena_app</code> 을 쓰세요. <b>GET /api/ai/chat</b> 으로 Ollama 여부 확인.<div class="ai-msg-meta">$ ollama serve · ollama pull qwen2.5</div></div>';
+  }
+}
+function appendAiMsg(role, text, meta) {
+  const box = document.getElementById('ai-chat-msgs');
+  const d = document.createElement('div');
+  d.className = role === 'user' ? 'ai-msg-user' : 'ai-msg-bot';
+  d.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'ai-msg-meta';
+    m.textContent = meta;
+    d.appendChild(m);
+  }
+  box.appendChild(d);
+  box.scrollTop = box.scrollHeight;
+}
+async function sendAiChatPreset(text) {
+  document.getElementById('ai-chat-input').value = text;
+  await sendAiChat();
+}
+async function sendAiChat() {
+  const input = document.getElementById('ai-chat-input');
+  const btn = document.getElementById('ai-chat-send');
+  const msg = (input.value || '').trim();
+  if (!msg) return;
+  if (!aiChatOpen) toggleAiChat();
+  appendAiMsg('user', msg);
+  input.value = '';
+  btn.disabled = true;
+  try {
+    const res = await fetch(apiUrl('/api/ai/chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, include_dashboard: true }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const dbg = [j.path && `path=${j.path}`, j.raw_path && `raw=${j.raw_path}`].filter(Boolean).join(' ');
+      appendAiMsg('bot', j.error || j.detail || res.statusText, dbg ? `HTTP ${res.status} · ${dbg}` : `HTTP ${res.status}`);
+    } else if (j.ok) {
+      appendAiMsg('bot', j.reply || '(빈 응답)', j.model ? `model: ${j.model}` : '');
+    } else {
+      appendAiMsg('bot', j.error || 'Ollama 사용 불가', '');
+    }
+  } catch (e) {
+    appendAiMsg('bot', String(e.message || e), '네트워크 또는 서버 확인');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Utils ────────────────────────────────────────────────────────────────────
 function setText(id, val) {
   const el = document.getElementById(id);
@@ -868,15 +1131,34 @@ function setText(id, val) {
 }
 function showError(msg) {
   const b = document.getElementById('error-banner');
-  b.textContent = '⚠ ' + msg; b.style.display = 'block';
+  if (!b) {
+    console.error('[Catena]', msg);
+    return;
+  }
+  b.textContent = '⚠ ' + msg;
+  b.style.display = 'block';
 }
 function hideError() {
-  document.getElementById('error-banner').style.display = 'none';
+  const b = document.getElementById('error-banner');
+  if (b) b.style.display = 'none';
 }
 
-// ── Bootstrap ────────────────────────────────────────────────────────────────
-loadData();
-setInterval(loadData, REFRESH_MS);
+// ── Bootstrap (DOMContentLoaded 는 이미 지난 경우가 있어 readyState 로 분기) ─
+function startDashboardRefresh() {
+  if (typeof loadData !== 'function') {
+    console.error('[Catena] loadData 가 없습니다. 위쪽 스크립트 구문 오류(Console)를 확인하세요.');
+    _hideLoadingOverlay();
+    showError('스크립트 초기화 실패 — 브라우저 Console 탭의 빨간 에러를 확인하세요.');
+    return;
+  }
+  loadData();
+  setInterval(loadData, REFRESH_MS);
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startDashboardRefresh);
+} else {
+  startDashboardRefresh();
+}
 </script>
 </body>
 </html>

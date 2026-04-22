@@ -13,6 +13,8 @@ GET  /api/v1/cobot/telemetry/latest   → 최신 1건 (latest.json 또는 ?robot
 GET  /api/v1/cobot/telemetry?limit=N   → 일별 파일에서 최근 N건
 GET  /health
 
+POST /api/ai/chat  → Ollama(Qwen) 도우미 (대시보드와 같이 쓸 땐 catena_app 권장 — 플릿 요약 포함)
+
 실행 예 (BerePi / 센터장님 워크플로와 동일 구조)::
 
     cd catena-x
@@ -30,6 +32,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,6 +47,34 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 LOGGER = logging.getLogger("cobot.telemetry.server")
+
+
+def _http_path_prefix() -> str:
+    pfx = os.environ.get("CATENAX_URL_PREFIX", "").strip().rstrip("/")
+    if pfx and not pfx.startswith("/"):
+        pfx = "/" + pfx
+    return pfx
+
+
+def _normalized_request_path(handler_path: str) -> str:
+    raw = (handler_path or "/").strip()
+    while raw.startswith("//"):
+        raw = "/" + raw.lstrip("/")
+    p = urlparse(raw).path or "/"
+    p = re.sub(r"/{2,}", "/", p)
+    if not p.startswith("/"):
+        p = "/" + p.lstrip("/")
+    p = p.rstrip("/") or "/"
+    prefix = _http_path_prefix()
+    if prefix and (p == prefix or p.startswith(prefix + "/")):
+        p = p[len(prefix):] or "/"
+        if not p.startswith("/"):
+            p = "/" + p.lstrip("/")
+        p = p.rstrip("/") or "/"
+    if p.casefold() == "/api/ai/chat":
+        p = "/api/ai/chat"
+    return p
+
 
 REQUIRED_FIELDS = {
     "robot_id",
@@ -162,7 +193,7 @@ class CobotTelemetryHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path = _normalized_request_path(self.path)
         qs = parse_qs(parsed.query)
 
         if path in ("/health", "/"):
@@ -232,13 +263,62 @@ class CobotTelemetryHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/ai/chat":
+            try:
+                from apps import ai_helpers
+
+                ollama_up = ai_helpers.check_ollama_available()
+            except Exception:
+                ollama_up = False
+            self._json(
+                200,
+                {
+                    "hint":       "Qwen 테스트: POST JSON {\"message\":\"안녕\"}",
+                    "server":     "app.py (telemetry)",
+                    "ollama_up":  ollama_up,
+                    "model":      os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b"),
+                    "ollama_url": os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+                    "note":       "플릿 JSON 요약까지 쓰려면 catena_app.py 를 같은 포트로 실행하세요.",
+                },
+            )
+            return
+
         self._json(404, {"error": "not_found", "path": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
+        path = _normalized_request_path(self.path)
+
+        if path == "/api/ai/chat":
+            if os.environ.get("CATENAX_DISABLE_AI", "").strip().lower() in ("1", "true", "yes"):
+                self._json(403, {"ok": False, "error": "AI 비활성화(CATENAX_DISABLE_AI)"})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                req = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            msg = str(req.get("message", "")).strip()
+            if not msg:
+                self._json(400, {"ok": False, "error": "message 필수"})
+                return
+            try:
+                from apps import ai_helpers
+
+                out = ai_helpers.dashboard_assistant_reply(msg, None)
+            except ImportError:
+                self._json(503, {"ok": False, "error": "ai_helpers 없음"})
+                return
+            if out.get("ok"):
+                self._json(200, out)
+            else:
+                self._json(503, out)
+            return
+
         if path != "/api/v1/cobot/telemetry":
-            self._json(404, {"error": "not_found"})
+            self._json(404, {"error": "not_found", "path": path,
+                             "hint": "대시보드+플릿 요약 AI는 server/catena_app.py 사용"})
             return
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8")
@@ -257,7 +337,7 @@ class CobotTelemetryHandler(BaseHTTPRequestHandler):
         try:
             from apps import telemetry_db as _tdb
 
-            _tdb.maybe_mirror_sqlite_after_file_store(
+            _tdb.maybe_mirror_after_file_store(
                 payload,
                 client_ip=self.client_address[0],
                 request_id=self.headers.get("X-Request-Id"),

@@ -6,4 +6,12 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 export CATENAX_STORE_DIR="${CATENAX_STORE_DIR:-$REPO_ROOT/catena-x/store}"
+# 인자에 --port 가 없으면 README 의 8765 와 동일하게 (예전처럼 ./run_dashboard.sh 만 쳐도 열림)
+has_port=false
+for a in "$@"; do
+  if [[ "$a" == "--port" ]] || [[ "$a" == --port=* ]]; then has_port=true; break; fi
+done
+if ! $has_port; then
+  set -- --port 8765 "$@"
+fi
 exec python3 "$REPO_ROOT/catena-x/server/catena_app.py" "$@"

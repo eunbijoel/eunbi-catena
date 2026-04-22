@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +36,36 @@ if str(_ROOT) not in sys.path:
 LOGGER = logging.getLogger("catena.dashboard")
 
 DEFAULT_MOCK = _ROOT / "data" / "catena_mock"
+
+
+def _http_path_prefix() -> str:
+    pfx = os.environ.get("CATENAX_URL_PREFIX", "").strip().rstrip("/")
+    if pfx and not pfx.startswith("/"):
+        pfx = "/" + pfx
+    return pfx
+
+
+def _norm_http_path(handler_path: str) -> str:
+    raw = (handler_path or "/").strip()
+    # "GET //api/..." 는 urlparse 에서 authority 로 잡혀 path 가 깨짐 → 선행 슬래시 정리
+    while raw.startswith("//"):
+        raw = "/" + raw.lstrip("/")
+    p = urlparse(raw).path or "/"
+    p = re.sub(r"/{2,}", "/", p)
+    if not p.startswith("/"):
+        p = "/" + p.lstrip("/")
+    p = p.rstrip("/") or "/"
+    prefix = _http_path_prefix()
+    if prefix and (p == prefix or p.startswith(prefix + "/")):
+        p = p[len(prefix):] or "/"
+        if not p.startswith("/"):
+            p = "/" + p.lstrip("/")
+        p = p.rstrip("/") or "/"
+    if p.casefold() == "/api/ai/chat":
+        p = "/api/ai/chat"
+    return p
+
+
 SAMPLE_JSON = _ROOT / "apps" / "sample_telemetry.json"
 
 
@@ -493,7 +524,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        path = _norm_http_path(self.path)
+        if path == "/api/ai/chat":
+            try:
+                from apps import ai_helpers
+
+                ollama_up = ai_helpers.check_ollama_available()
+            except Exception:
+                ollama_up = False
+            self._json(
+                200,
+                {
+                    "hint":       "이 서버는 dashboard.py 입니다. Catena-X UI는 catena_app + dashboard.html 권장.",
+                    "server":     "dashboard.py",
+                    "ollama_up":  ollama_up,
+                    "model":      os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b"),
+                    "ollama_url": os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+                },
+            )
+            return
         if path in ("/", "/index.html"):
             data = HTML_PAGE.encode("utf-8")
             self.send_response(200)
@@ -512,7 +561,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
     def do_POST(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        path = _norm_http_path(self.path)
+        if path == "/api/ai/chat":
+            if os.environ.get("CATENAX_DISABLE_AI", "").strip().lower() in ("1", "true", "yes"):
+                self._json(403, {"ok": False, "error": "AI 비활성화(CATENAX_DISABLE_AI)"})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                req = json.loads(raw) if raw.strip() else {}
+            except json.JSONDecodeError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            msg = str(req.get("message", "")).strip()
+            if not msg:
+                self._json(400, {"ok": False, "error": "message 필수"})
+                return
+            include = bool(req.get("include_dashboard", True))
+            ctx = None
+            if include:
+                try:
+                    ctx = json.dumps(aggregate_store(), ensure_ascii=False)[:12_000]
+                except Exception as exc:
+                    ctx = json.dumps({"error": str(exc)}, ensure_ascii=False)
+            try:
+                from apps import ai_helpers
+
+                out = ai_helpers.dashboard_assistant_reply(msg, ctx)
+            except ImportError:
+                self._json(503, {"ok": False, "error": "ai_helpers 없음"})
+                return
+            code = 200 if out.get("ok") else 503
+            self._json(code, out)
+            return
         if path == "/api/pipeline/run":
             try:
                 out = run_sample_pipeline()

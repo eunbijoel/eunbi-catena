@@ -15,16 +15,16 @@
 - 모든 AI 함수는 OllamaUnavailableError를 발생시키며,
   호출부에서 try/except로 graceful fallback 처리합니다.
 - AI 응답은 참고용(advisory)이며 결정권은 항상 결정론적 로직에 있습니다.
-- 모델 이름은 환경변수 OLLAMA_MODEL로 변경 가능합니다 (기본: llama3).
+- 모델 이름은 환경변수 OLLAMA_MODEL로 변경 가능합니다 (기본: qwen2.5-coder:14b, ollama list 와 동일한 태그).
 
 Ollama 설치 및 실행:
     $ ollama serve
-    $ ollama pull llama3      # 또는 mistral, phi3 등
+    $ ollama pull qwen2.5-coder:14b   # 또는 ollama list 에 있는 태그
 
 환경변수:
-    OLLAMA_BASE_URL  = http://localhost:11434   (기본값)
-    OLLAMA_MODEL     = llama3                  (기본값)
-    OLLAMA_TIMEOUT   = 30                      (초 단위)
+    OLLAMA_BASE_URL  = http://127.0.0.1:11434   (기본값)
+    OLLAMA_MODEL     = qwen2.5-coder:14b        (기본값, ollama list 와 맞출 것)
+    OLLAMA_TIMEOUT   = 180                     (초 단위, 큰 모델·긴 컨텍스트용 기본값)
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
@@ -44,13 +45,16 @@ LOGGER = logging.getLogger("catenax.ai_helpers")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ollama_base_url() -> str:
-    return os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    # localhost → ::1 만 가리키는 환경에서 IPv4-only Ollama 와 안 맞는 경우가 있어 127.0.0.1 기본
+    return os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 
 def _ollama_model() -> str:
-    return os.environ.get("OLLAMA_MODEL", "llama3")
+    # 팀 PC에 ``qwen2.5`` 태그가 없고 ``qwen2.5-coder:14b`` 만 있는 경우가 많아 기본값을 맞춤 — 필요 시 OLLAMA_MODEL 로 덮어쓰기
+    return os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b")
 
 def _ollama_timeout() -> float:
-    return float(os.environ.get("OLLAMA_TIMEOUT", "30"))
+    # 14B+ 모델 + 대시보드 JSON 붙이면 30초 부족한 경우가 많음
+    return float(os.environ.get("OLLAMA_TIMEOUT", "180"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -65,11 +69,12 @@ class OllamaUnavailableError(RuntimeError):
 # 저수준 HTTP 호출
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _call_ollama(prompt: str) -> str:
+def _call_ollama(prompt: str, *, generate_options: Optional[Dict[str, Any]] = None) -> str:
     """Ollama /api/generate 엔드포인트를 호출하고 응답 텍스트를 반환합니다.
 
     Args:
         prompt: Ollama에 전달할 프롬프트 문자열
+        generate_options: Ollama ``options`` 객체(예: num_predict, temperature). 대시보드 챗만 짧게 줄 때 사용.
 
     Returns:
         모델의 텍스트 응답
@@ -77,12 +82,15 @@ def _call_ollama(prompt: str) -> str:
     Raises:
         OllamaUnavailableError: 연결 실패, 타임아웃, HTTP 오류 시
     """
-    url     = f"{_ollama_base_url()}/api/generate"
-    payload = json.dumps({
+    url = f"{_ollama_base_url()}/api/generate"
+    body: Dict[str, Any] = {
         "model":  _ollama_model(),
         "prompt": prompt,
         "stream": False,         # 단일 응답 수신 (스트리밍 비활성화)
-    }).encode("utf-8")
+    }
+    if generate_options:
+        body["options"] = generate_options
+    payload = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(
         url,
@@ -98,13 +106,33 @@ def _call_ollama(prompt: str) -> str:
         return data.get("response", "").strip()
 
     except urllib.error.URLError as exc:
+        # HTTPError 는 URLError 의 서브클래스 — 어떤 환경/버전에서도 HTTP 응답 오류를 여기서 분기
+        if isinstance(exc, urllib.error.HTTPError):
+            detail = exc.read().decode("utf-8", errors="replace")[:800]
+            if exc.code == 404:
+                raise OllamaUnavailableError(
+                    f"Ollama 404 — 모델 이름이 ollama list 와 다르거나 없습니다 (OLLAMA_MODEL={_ollama_model()!r}).\n"
+                    f"예: export OLLAMA_MODEL=qwen2.5-coder:14b  후 catena 서버 재시작\n"
+                    f"$ ollama pull {_ollama_model()}  (태그까지 정확히)\n"
+                    f"OLLAMA_BASE_URL={_ollama_base_url()!r}\n응답: {detail}"
+                ) from exc
+            raise OllamaUnavailableError(
+                f"Ollama HTTP {exc.code}: {detail}"
+            ) from exc
         raise OllamaUnavailableError(
             f"Ollama 서버({_ollama_base_url()})에 연결할 수 없습니다: {exc.reason}\n"
             "$ ollama serve 로 서버를 시작하세요."
         ) from exc
-    except urllib.error.HTTPError as exc:
+    except TimeoutError as exc:
         raise OllamaUnavailableError(
-            f"Ollama HTTP 오류 {exc.code}: {exc.read().decode('utf-8', errors='replace')}"
+            f"Ollama 응답 시간 초과(OLLAMA_TIMEOUT={int(_ollama_timeout())}초). "
+            f"큰 모델이면 export OLLAMA_TIMEOUT=300 이상 후 catena 재시작.\n"
+            f"원인: {exc}"
+        ) from exc
+    except socket.timeout as exc:
+        raise OllamaUnavailableError(
+            f"Ollama 소켓 타임아웃(OLLAMA_TIMEOUT={int(_ollama_timeout())}초). "
+            f"export OLLAMA_TIMEOUT=300 이상 권장.\n원인: {exc}"
         ) from exc
     except Exception as exc:
         raise OllamaUnavailableError(f"Ollama 호출 실패: {exc}") from exc
@@ -243,6 +271,57 @@ Rationale: <your rationale>
         "model":              _ollama_model(),
         "ok":                 True,
     }
+
+
+def dashboard_assistant_reply(
+    user_message: str,
+    fleet_context_json: Optional[str] = None,
+    *,
+    max_context_chars: int = 9000,
+) -> Dict[str, Any]:
+    """대시보드 챗봇용 — 사용법·필드·검증·온보딩 안내 (참고용, 짧은 답 권장).
+
+    ``fleet_context_json`` 이 있으면 현재 플릿 요약을 함께 넣어 답변 품질을 올립니다.
+    """
+    msg = (user_message or "").strip()
+    if not msg:
+        return {"ok": False, "reply": "", "error": "메시지가 비어 있습니다.", "model": _ollama_model()}
+
+    ctx = ""
+    if fleet_context_json:
+        raw = fleet_context_json.strip()
+        if len(raw) > max_context_chars:
+            raw = raw[:max_context_chars] + "\n…(이하 생략)"
+        ctx = f"\n\n[현재 대시보드에서 가져온 JSON 요약]\n{raw}\n"
+
+    prompt = f"""You are the Catena-X cobot **dashboard helper** (operators read this in the UI).
+
+STYLE (must follow):
+- Answer in **at most 5 short bullet lines** OR **under 90 words** total. No long paragraphs.
+- **Lead with the direct fact** (e.g. robot count, status) if the JSON or question gives it; then at most 2 bullets for how/where to verify.
+- No generic intro (“Sure, I’d be happy…”). No closing pleasantries.
+- Do **not** paste large JSON blocks unless the user explicitly asks for raw JSON.
+- Korean or English is fine; stay concise either way.
+
+SCOPE: telemetry required fields, validation tips, onboarding CLI examples (edc.py), how to read dashboard / AAS / EDC numbers. If unsure, say you don’t know.
+
+Disclaimer: advisory only; operators own safety decisions.
+{ctx}
+User question:
+{msg}
+"""
+
+    # 짧은 답: 생성 토큰·온도 제한 (다른 AI 호출 경로는 기본 _call_ollama 그대로)
+    dash_opts: Dict[str, Any] = {
+        "temperature": 0.35,
+        "num_predict": 320,
+    }
+
+    try:
+        text = _call_ollama(prompt, generate_options=dash_opts)
+        return {"ok": True, "reply": text.strip(), "model": _ollama_model()}
+    except OllamaUnavailableError as exc:
+        return {"ok": False, "reply": "", "error": str(exc), "model": _ollama_model()}
 
 
 def check_ollama_available() -> bool:

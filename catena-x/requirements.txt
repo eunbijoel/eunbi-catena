@@ -1,0 +1,2 @@
+# 선택: Postgres 텔레메트리 미러(COBOT_DATABASE_URL) 시 필요
+psycopg2-binary>=2.9.9

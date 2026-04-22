@@ -525,7 +525,7 @@ def build_pipeline_from_env(ai_disabled: Optional[bool] = None) -> CobotEDCPipel
     CATENAX_MOCK_DATA_DIR        위와 동일 (이전 이름 호환)
     CATENAX_DISABLE_AI           1/true/yes 이면 Ollama 단계 생략
     OLLAMA_BASE_URL              http://localhost:11434
-    OLLAMA_MODEL                 llama3
+    OLLAMA_MODEL                 qwen2.5 (기본값, 환경 변수로 태그 변경 가능)
     """
     edc_mgmt_url = os.environ.get("CATENAX_EDC_MANAGEMENT_URL")
     edc_api_key  = os.environ.get("CATENAX_EDC_API_KEY")

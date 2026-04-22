@@ -14,6 +14,7 @@
   GET  /api/robots/{robot_id}        특정 로봇 상세
   GET  /api/catalog                  EDC 카탈로그
   GET  /api/policies                 등록 정책 목록
+  POST /api/ai/chat                  대시보드 Qwen(Ollama) 도우미 (JSON: message, include_dashboard?)
 
 텔레메트리 수신 (협동로봇 → 서버)
   POST /api/v1/cobot/telemetry       텔레메트리 수신·저장
@@ -21,8 +22,11 @@
   GET  /api/v1/cobot/telemetry?limit=N
 
 실행:
-  python3 server/app.py
-  python3 server/app.py --port 8080 --store ../store
+  python3 server/catena_app.py
+  python3 server/catena_app.py --port 8765 --store ../store
+
+환경 변수 (선택):
+  CATENAX_DUAL_STACK=1  — 기본은 IPv4(0.0.0.0)만; 일부 환경에서 ``::`` 듀얼스택이 Chrome ERR_EMPTY_RESPONSE(-324) 를 낼 때 끄거나 둘 중 하나 시도.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import json
 import logging
 import os
 import re
+import socket
 import sys
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -141,7 +146,15 @@ def _jload(path: Path) -> Optional[Dict[str, Any]]:
 
 def _all_submodels() -> List[Dict[str, Any]]:
     d = _store_dir() / "aas"
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*_submodel.json"))] if d.exists() else []
+    if not d.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    for p in sorted(d.glob("*_submodel.json")):
+        try:
+            out.append(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            LOGGER.warning("submodel 건너뜀(손상 또는 읽기 실패): %s", p)
+    return out
 
 
 def _all_shells() -> List[Dict[str, Any]]:
@@ -163,26 +176,45 @@ def _flatten(sm: Dict[str, Any]) -> Dict[str, Any]:
     def props(elements: List[Dict]) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         for e in elements:
+            if not isinstance(e, dict):
+                continue
             mt = e.get("modelType", "")
             if mt == "Property":
-                k, v, t = e["idShort"], e.get("value", ""), e.get("valueType", "xs:string")
+                k = e.get("idShort", "")
+                if not k:
+                    continue
+                v, t = e.get("value", ""), e.get("valueType", "xs:string")
                 try:
                     out[k] = float(v) if t in ("xs:double", "xs:float") else (
                              int(v)   if t == "xs:integer" else v)
                 except (ValueError, TypeError):
                     out[k] = v
             elif mt == "SubmodelElementCollection":
-                out[e["idShort"]] = props(e.get("value", []))
+                coll_id = e.get("idShort", "")
+                if coll_id:
+                    out[coll_id] = props(e.get("value", []))
         return out
 
     sec: Dict[str, Any] = {}
-    for smc in sm.get("submodelElements", []):
-        sec[smc["idShort"]] = props(smc.get("value", []))
+    for smc in sm.get("submodelElements", []) or []:
+        if not isinstance(smc, dict):
+            continue
+        sid = smc.get("idShort", "")
+        if sid:
+            sec[sid] = props(smc.get("value", []) or [])
 
-    op   = sec.get("OperationalState", {})
-    prod = sec.get("ProductionMetrics", {})
-    kin  = sec.get("KinematicState", {})
-    qual = sec.get("QualityAndDiagnostics", {})
+    op   = sec.get("OperationalState", {}) or {}
+    prod = sec.get("ProductionMetrics", {}) or {}
+    kin  = sec.get("KinematicState", {}) or {}
+    qual = sec.get("QualityAndDiagnostics", {}) or {}
+    if not isinstance(op, dict):
+        op = {}
+    if not isinstance(prod, dict):
+        prod = {}
+    if not isinstance(kin, dict):
+        kin = {}
+    if not isinstance(qual, dict):
+        qual = {}
 
     good   = int(prod.get("GoodParts", 0) or 0)
     reject = int(prod.get("RejectParts", 0) or 0)
@@ -241,7 +273,12 @@ def _joint_chart_series(robots: List[Dict[str, Any]]) -> Tuple[List[Dict[str, An
 
 
 def _build_dashboard() -> Dict[str, Any]:
-    robots  = [_flatten(sm) for sm in _all_submodels()]
+    robots: List[Dict[str, Any]] = []
+    for sm in _all_submodels():
+        try:
+            robots.append(_flatten(sm))
+        except Exception as exc:
+            LOGGER.warning("submodel flatten 건너뜀: %s", exc)
     catalog = list(_edc("catalog.json").values())
 
     status_counts: Dict[str, int] = {}
@@ -325,6 +362,29 @@ def _build_dashboard() -> Dict[str, Any]:
     }
 
 
+def _compact_dashboard_for_ai() -> str:
+    """대시보드 AI 챗용 — 토큰 부담을 줄이기 요약 JSON 문자열만."""
+    try:
+        d      = _build_dashboard()
+        robots = d.get("robots") or []
+        keys   = (
+            "robot_id", "line_id", "station_id", "status", "quality_flag",
+            "yield_rate", "good_parts", "reject_parts", "temperature_c",
+            "vibration_mm_s", "cycle_time_ms", "power_watts",
+        )
+        slim_robots = [{k: r.get(k) for k in keys} for r in robots[:30]]
+        slim = {
+            "generated_at": d.get("generated_at"),
+            "summary":      d.get("summary"),
+            "robots":       slim_robots,
+            "catalog_rows": (d.get("catalog") or [])[:20],
+        }
+        return json.dumps(slim, ensure_ascii=False)
+    except Exception as exc:
+        LOGGER.warning("대시보드 AI용 요약 생성 실패: %s", exc)
+        return "{}"
+
+
 def _build_robot_detail(robot_id: str) -> Optional[Dict[str, Any]]:
     safe_sm    = re.sub(r"[^\w\-]", "_", f"urn:cobot:sm:{robot_id}")
     safe_shell = re.sub(r"[^\w\-]", "_", f"urn:cobot:shell:{robot_id}")
@@ -352,6 +412,42 @@ def _build_robot_detail(robot_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HTTP 경로 (일부 클라이언트·프록시에서 `//api/...` 등이 들어오는 경우 흡수)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _http_path_prefix() -> str:
+    """리버스 프록시가 ``/catena/api/...`` 처럼 넘길 때 ``CATENAX_URL_PREFIX=/catena`` 설정."""
+    pfx = os.environ.get("CATENAX_URL_PREFIX", "").strip().rstrip("/")
+    if pfx and not pfx.startswith("/"):
+        pfx = "/" + pfx
+    return pfx
+
+
+def _normalized_request_path(handler_path: str) -> str:
+    raw = (handler_path or "/").strip()
+    while raw.startswith("//"):
+        raw = "/" + raw.lstrip("/")
+    # ``GET http://host:port/path HTTP/1.1`` → path 만 사용
+    parsed = urlparse(raw)
+    p = parsed.path or "/"
+    p = re.sub(r"/{2,}", "/", p)
+    if not p.startswith("/"):
+        p = "/" + p.lstrip("/")
+    p = p.rstrip("/") or "/"
+
+    prefix = _http_path_prefix()
+    if prefix and (p == prefix or p.startswith(prefix + "/")):
+        p = p[len(prefix):] or "/"
+        if not p.startswith("/"):
+            p = "/" + p.lstrip("/")
+        p = p.rstrip("/") or "/"
+
+    if p.casefold() == "/api/ai/chat":
+        p = "/api/ai/chat"
+    return p
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HTTP 핸들러
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -372,7 +468,10 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            raise
 
     def _body(self) -> Dict[str, Any]:
         n = int(self.headers.get("Content-Length", "0"))
@@ -388,14 +487,45 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
+        try:
+            self._do_GET_impl()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:
+            LOGGER.exception("GET 처리 실패 path=%r", getattr(self, "path", ""))
+            try:
+                body = json.dumps(
+                    {"error": "internal", "detail": str(exc)[:800]},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                self.send_response(int(HTTPStatus.INTERNAL_SERVER_ERROR))
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                LOGGER.debug("내부 에러 응답을 못 보냄(클라이언트 끊김 등)")
+
+    def _do_GET_impl(self) -> None:
         parsed = urlparse(self.path)
-        path   = parsed.path
+        path   = _normalized_request_path(self.path)
 
         # Static dashboard
         if path in ("/", "/dashboard.html"):
             p = _CATENAX_DIR / "dashboard.html"
-            self._html(p.read_bytes()) if p.exists() else self._json(
-                HTTPStatus.NOT_FOUND, {"error": "dashboard.html 없음"})
+            if not p.is_file():
+                self._json(HTTPStatus.NOT_FOUND, {"error": "dashboard.html 없음", "path": str(p)})
+                return
+            try:
+                raw = p.read_bytes()
+            except OSError as exc:
+                LOGGER.exception("dashboard.html 읽기 실패")
+                self._json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "dashboard_read_failed", "detail": str(exc), "path": str(p)},
+                )
+                return
+            self._html(raw)
             return
 
         if path == "/health":
@@ -407,7 +537,14 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/dashboard":
-            self._json(HTTPStatus.OK, _build_dashboard())
+            try:
+                self._json(HTTPStatus.OK, _build_dashboard())
+            except Exception as exc:
+                LOGGER.exception("/api/dashboard 빌드 실패")
+                self._json(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "dashboard_build_failed", "detail": str(exc)},
+                )
             return
 
         if path == "/api/robots":
@@ -451,11 +588,73 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"count": len(items), "items": items})
             return
 
-        self._json(HTTPStatus.NOT_FOUND, {"error": f"unknown path: {path}"})
+        if path == "/api/ai/chat":
+            try:
+                from apps import ai_helpers
+
+                ollama_up = ai_helpers.check_ollama_available()
+            except Exception:
+                ollama_up = False
+            self._json(HTTPStatus.OK, {
+                "hint":       "Qwen 테스트: POST JSON {\"message\":\"안녕\"} 이 경로로 보내세요.",
+                "server":     "catena_app",
+                "ollama_up":  ollama_up,
+                "model":      os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b"),
+                "ollama_url": os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+            })
+            return
+
+        self._json(
+            HTTPStatus.NOT_FOUND,
+            {
+                "error":     f"unknown path: {path}",
+                "raw_path":  self.path,
+                "hint":      "서브경로 배포면 CATENAX_URL_PREFIX 또는 dashboard.html·API 같은 호스트인지 확인",
+            },
+        )
 
     def do_POST(self) -> None:  # noqa: N802
-        if urlparse(self.path).path != "/api/v1/cobot/telemetry":
-            self._json(HTTPStatus.NOT_FOUND, {"error": "unknown path"})
+        path = _normalized_request_path(self.path)
+        LOGGER.info("POST %s", path)
+
+        if path == "/api/ai/chat":
+            if os.environ.get("CATENAX_DISABLE_AI", "").strip().lower() in ("1", "true", "yes"):
+                self._json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "AI 비활성화(CATENAX_DISABLE_AI)"})
+                return
+            try:
+                req = self._body()
+            except (ValueError, json.JSONDecodeError) as e:
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(e)})
+                return
+            msg = str(req.get("message", "")).strip()
+            if not msg:
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "message 필수"})
+                return
+            include = bool(req.get("include_dashboard", True))
+            ctx     = _compact_dashboard_for_ai() if include else None
+            try:
+                from apps import ai_helpers
+
+                out = ai_helpers.dashboard_assistant_reply(msg, ctx)
+            except ImportError:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "ai_helpers 없음"})
+                return
+            if out.get("ok"):
+                self._json(HTTPStatus.OK, out)
+            else:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, out)
+            return
+
+        if path != "/api/v1/cobot/telemetry":
+            self._json(
+                HTTPStatus.NOT_FOUND,
+                {
+                    "error":    "unknown path",
+                    "path":     path,
+                    "raw_path": self.path,
+                    "hint":     "POST /api/ai/chat 만 AI입니다. 경로가 /접두사/api/... 이면 CATENAX_URL_PREFIX",
+                },
+            )
             return
         try:
             payload = self._body()
@@ -470,7 +669,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         try:
             from apps import telemetry_db as _tdb
 
-            _tdb.maybe_mirror_sqlite_after_file_store(
+            _tdb.maybe_mirror_after_file_store(
                 payload,
                 client_ip=self.client_address[0],
                 request_id=self.headers.get("X-Request-Id"),
@@ -487,18 +686,70 @@ class TelemetryHandler(BaseHTTPRequestHandler):
 # 실행
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _DualStackThreadingHTTPServer(ThreadingHTTPServer):
+    """``0.0.0.0`` 대신 ``::`` + ``IPV6_V6ONLY=0`` 로 바인드하면 ``localhost``→``::1`` 도 수락."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self) -> None:
+        self.socket = socket.socket(self.address_family, self.socket_type)
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        if self.allow_reuse_address:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind(self.server_address)
+
+
 def run_server(host: str, port: int) -> None:
-    httpd = ThreadingHTTPServer((host, port), TelemetryHandler)
-    LOGGER.info("Catena-X Server  →  http://%s:%d", host, port)
-    LOGGER.info("대시보드: http://%s:%d/dashboard.html", host, port)
-    LOGGER.info("API:      http://%s:%d/api/dashboard", host, port)
+    """기본은 IPv4 ``0.0.0.0`` 만 — 일부 환경에서 ``::`` 듀얼스택이 ERR_EMPTY_RESPONSE(-324) 를 유발할 수 있음."""
+    httpd: ThreadingHTTPServer
+    dual = os.environ.get("CATENAX_DUAL_STACK", "").strip().lower() in ("1", "true", "yes")
+    if host in ("", "0.0.0.0") and socket.has_ipv6 and dual:
+        try:
+            httpd = _DualStackThreadingHTTPServer(("::", port), TelemetryHandler)
+            LOGGER.info("바인드: :: (IPv4·IPv6 동시) — 끄려면 CATENAX_DUAL_STACK unset")
+        except OSError as exc:
+            LOGGER.warning("IPv6(::) 바인드 실패, IPv4(0.0.0.0)만 사용: %s", exc)
+            try:
+                httpd = ThreadingHTTPServer(("0.0.0.0", port), TelemetryHandler)
+            except OSError as exc2:
+                LOGGER.error(
+                    "포트 %d 를 열 수 없습니다: %s — 다른 터미널의 python 이 점유 중일 수 있습니다.",
+                    port,
+                    exc2,
+                )
+                LOGGER.error("확인: ss -tlnp | grep ':%d' 또는 fuser -v %d/tcp", port, port)
+                raise SystemExit(1) from exc2
+    elif host in ("", "0.0.0.0"):
+        try:
+            httpd = ThreadingHTTPServer(("0.0.0.0", port), TelemetryHandler)
+            LOGGER.info("바인드: 0.0.0.0 (IPv4). IPv6 localhost 필요 시 CATENAX_DUAL_STACK=1")
+        except OSError as exc2:
+            LOGGER.error(
+                "포트 %d 를 열 수 없습니다: %s — 다른 터미널의 python 이 점유 중일 수 있습니다.",
+                port,
+                exc2,
+            )
+            LOGGER.error("확인: ss -tlnp | grep ':%d' 또는 fuser -v %d/tcp", port, port)
+            raise SystemExit(1) from exc2
+    else:
+        try:
+            httpd = ThreadingHTTPServer((host, port), TelemetryHandler)
+        except OSError as exc:
+            LOGGER.error("포트 %d 바인드 실패 (%s): %s", port, host, exc)
+            LOGGER.error("확인: ss -tlnp | grep ':%d'", port)
+            raise SystemExit(1) from exc
+
+    LOGGER.info("Catena-X Server  →  http://127.0.0.1:%d (원격 접속이면 이 PC IP)", port)
+    LOGGER.info("대시보드: http://127.0.0.1:%d/dashboard.html", port)
+    LOGGER.info("API:      http://127.0.0.1:%d/api/dashboard  |  AI챗: POST /api/ai/chat", port)
     httpd.serve_forever()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Catena-X 협동로봇 서버")
     parser.add_argument("--host",  default=os.environ.get("COBOT_SERVER_HOST", "0.0.0.0"))
-    parser.add_argument("--port",  type=int, default=int(os.environ.get("COBOT_SERVER_PORT", "8080")))
+    # README·run_dashboard.sh 가 8765 를 안내하므로 기본 포트를 맞춤 (app.py 텔레메트리 API 는 별도 8080 등).
+    parser.add_argument("--port",  type=int, default=int(os.environ.get("COBOT_SERVER_PORT", "8765")))
     parser.add_argument("--store", default=None, help="AAS/EDC 스토어 경로")
     args = parser.parse_args()
     if args.store:
